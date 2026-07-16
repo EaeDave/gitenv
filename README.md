@@ -1,39 +1,167 @@
 # gitenv
 
-<!-- business-readme:business-rules:start -->
-## Regras do produto
+> Encrypted, Git-backed `.env` profiles with a terminal UI.
 
-`gitenv` mantém perfis criptografados de arquivos `.env` e usa Git apenas para versioná-los e transportá-los entre computadores.
+`gitenv` keeps your project `.env` files as **encrypted profiles** in a Git
+repository and gives you a TUI to capture, switch, edit, and sync them across
+machines. Secrets are encrypted with [age](https://age-encryption.org); Git
+only ever stores ciphertext, so you can host the vault on any private
+GitHub/GitLab/Gitea/self-hosted remote.
 
-- A interface principal é a TUI aberta pelo comando `gitenv`; no primeiro uso ela cria um vault protegido por senha mestra ou clona um vault existente.
-- A senha mestra protege a identidade privada armazenada no vault. Ela deve ter ao menos 12 caracteres e nunca é salva. A identidade desbloqueada usa o cofre de credenciais do sistema quando disponível, com fallback local de permissão restrita.
-- Vaults antigos sem proteção são migrados pela TUI antes de qualquer acesso. Uma identidade carregada só é aceita se for recipiente autorizado do vault; telas bloqueadas não permitem acessar o dashboard por `Esc`/`q`.
-- Um computador novo pode entrar por senha mestra, colar sua recovery key diretamente na TUI ou pedir aprovação a um dispositivo autorizado. Importação por caminho de arquivo permanece disponível apenas na CLI avançada.
-- Se nenhuma forma de acesso estiver disponível, a pessoa pode desconectar o vault somente deste computador e voltar ao onboarding. Isso não apaga os arquivos criptografados nem o remoto; sem senha, recovery ou dispositivo autorizado, os segredos antigos continuam criptograficamente irrecuperáveis.
-- O remoto do vault é independente dos remotos dos projetos. A TUI permite configurar, trocar, testar ou remover esse remoto e nunca exibe credenciais embutidas na URL.
-- Quando executado dentro de um repositório Git, `gitenv` usa sua raiz e detecta o `.env`. Após desbloquear, um remoto de projeto equivalente identifica e vincula automaticamente o projeto, mesmo com pasta renomeada ou URL SSH/HTTPS diferente; isso nunca aplica um perfil nem sobrescreve o `.env`.
-- Sem correspondência exata de remoto, apenas o mesmo nome de pasta pode sugerir um projeto existente; projetos sem relação não são sugeridos.
-- Quando aberto dentro de um projeto já vinculado, a TUI abre direto na tela de perfis desse projeto e não lista automaticamente os outros projetos. O atalho `p` desbloqueia a navegação entre todos os projetos; enquanto ela não é desbloqueada, `Esc`/`q` na tela de perfis encerra o programa. Aberto fora de qualquer projeto vinculado, a TUI mostra a lista de projetos normalmente.
-- Cada projeto pode ter perfis nomeados, como `dev`, `staging` e `prod`. Caminhos e vínculos são locais por computador e nunca são enviados.
-- `capture` criptografa o `.env` atual preservando comentários, linhas desativadas, ordem e quebras de linha byte a byte. Antes de qualquer captura, a TUI mostra um preview estrutural com nomes e tipos de mudança, nunca valores, e só grava após confirmação explícita; a CLI permanece direta para automação. `switch` aplica um perfil ao projeto vinculado.
-- Um `.env` modificado depois da última captura nunca é sobrescrito silenciosamente: a CLI exige `--force`; a TUI exige confirmação explícita.
-- Um perfil ativo não pode ser removido; aplique outro primeiro. Remover perfil inativo exige confirmação e elimina apenas ciphertext e metadados do vault.
-- Na tela de perfis, apenas o perfil ativo pode aparecer como `modified` (em amarelo), porque o único `.env` local corresponde a ele; os demais perfis são snapshots íntegros no vault e, quando o `.env` local coincide byte a byte com um deles, esse perfil é sinalizado como `matches .env`. O status do projeto também é destacado em amarelo quando há mudança não capturada.
-- A TUI distingue o estado do `.env` em relação ao perfil ativo do estado do vault local em relação ao remoto. A verificação remota faz apenas `fetch`, expira após oito segundos e informa sincronizado, mudanças locais, mudanças remotas, divergência, falta de remoto, indisponibilidade ou falha de autenticação.
-- O visualizador de mudanças (`v`) abre a partir da tela de perfis ou da lista de projetos e é rolável. Quando aberto de um projeto focado, ele se limita a esse projeto; quando aberto navegando entre projetos, mostra todos. Inclui diferenças entre cada `.env` local e seu perfil ativo, mudanças do vault já commitadas, ainda não commitadas e recebidas do remoto. Por padrão exibe somente projeto, perfil, nomes de variáveis e tipos de mudança. Dentro dele, `x` revela sob demanda um diff literal com linhas `-` antigas e `+` novas, incluindo valores — e, no modo focado, apenas o projeto atual é descriptografado; `x` novamente oculta, e sair da tela descarta o plaintext da memória do modelo. `Esc` volta para a tela de origem.
-- Dentro do visualizador é possível agir sobre um único ambiente: `Tab`/`Shift+Tab` selecionam o projeto/perfil, `p` captura e publica somente aquele `.env` e `d` restaura somente aquele `.env` pelo perfil ativo. Publicar um único ambiente exige que o vault esteja sincronizado e limpo, e tanto publicar quanto descartar exigem confirmação explícita.
-- O atalho `e`, na tela de perfis ou no visualizador, abre um editor de texto embutido na própria TUI para o `.env` local do projeto, sem depender de editores externos. Enquanto se digita, o editor mostra em tempo real um diff no estilo `git diff`, com linhas `-` antigas e `+` novas, entre o `.env` local e o perfil ativo capturado no vault; quando o projeto ainda não tem perfil capturado, ele informa que não há base de comparação. Salvar (`ctrl+s`) grava o arquivo preservando byte a byte o que não foi tocado; sair com alterações não salvas exige confirmação. O editor embutido recusa `.env` com tabulações, caracteres de controle ou bytes não-UTF-8 em vez de corrompê-los silenciosamente.
-- O atalho `s` propõe a ação adequada e exige confirmação antes de baixar ou publicar. Divergências e estados indisponíveis são bloqueados com orientação; sincronizar nunca aplica um perfil nem modifica arquivos `.env` locais. Os atalhos `p` e `u` permanecem disponíveis como operações avançadas explícitas.
-- Git armazena somente ciphertext, metadados e material público/embrulhado. Recovery identity e senha mestra exigem guarda separada; perder ambas as formas de acesso torna os perfis irrecuperáveis.
-<!-- business-readme:business-rules:end -->
+*[Versão em português mais abaixo.](#português-pt-br)*
 
-<!-- business-readme:technical:start -->
-## Guia técnico
+## Features
 
-### Requisitos
+- 🔐 **age-encrypted** profiles — Git sees only ciphertext, metadata, and wrapped keys.
+- 🖥️ **TUI-first** workflow to capture, apply, edit, and sync `.env` files.
+- 🗂️ **Multiple named profiles** per project (`dev`, `staging`, `prod`, …).
+- 🧬 **Byte-for-byte capture** — comments, disabled lines, ordering, and line endings are preserved.
+- 🔍 **Value-free diff viewer** with opt-in literal reveal (`x`), scoped to the current project.
+- ✏️ **Built-in `.env` editor** with a live `git diff`-style view — no external editor required.
+- 🔑 **Recoverable access** — master password, recovery key, or approval from an enrolled device.
+- 💻 **Cross-platform** static binaries for Linux, macOS, and Windows.
 
-- Git instalado e autenticado para o remoto escolhido.
-- Go 1.24+ somente para compilar do código-fonte.
+## Install
+
+### Linux & macOS
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/EaeDave/gitenv/main/install.sh | bash
+```
+
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/EaeDave/gitenv/main/install.ps1 | iex
+```
+
+The installers detect your OS and architecture, download the matching static
+binary from the latest GitHub release, verify its SHA-256 checksum, and install
+to `~/.local/bin` (Linux/macOS) or `%LOCALAPPDATA%\gitenv\bin` (Windows). Set
+`GITENV_VERSION` to pin a release and `GITENV_INSTALL_DIR` to change the target.
+
+### From source
+
+Requires Go 1.24+:
+
+```bash
+go install github.com/eaedave/gitenv/cmd/gitenv@latest
+# or
+go build -o gitenv ./cmd/gitenv
+```
+
+## Quick start
+
+Run `gitenv` inside a project that has a `.env`:
+
+```bash
+cd ~/dev/my-api
+gitenv
+```
+
+On first run the TUI walks you through:
+
+1. creating a master-password-protected vault (or cloning an existing one);
+2. configuring the vault's Git remote (optional);
+3. unlocking with your master password, a pasted recovery key, or device approval;
+4. linking the current project without overwriting its `.env`;
+5. capturing an initial profile.
+
+From then on, the main screen lets you apply, capture, create, and remove
+profiles, sync with the remote, review changes, and edit `.env` files inline.
+
+## TUI shortcuts
+
+Profiles screen:
+
+```text
+enter   apply the selected profile
+e       edit the project's .env (inline editor)
+v       open the change viewer
+s       sync with the remote (contextual)
+c       capture the active profile
+n       create a new profile
+d       remove an inactive profile
+r       reload status
+p       browse all projects (when focused on one)
+esc/q   back / quit
+```
+
+Change viewer:
+
+```text
+tab / shift+tab   select a project/profile
+x                 reveal / hide literal values
+e                 edit the selected .env
+p / d             publish / discard the selected environment
+↑↓ / jk           scroll        pgup/pgdn  page        home/end  jump
+esc/q             back
+```
+
+Inline editor: `ctrl+s` save, `esc` cancel, `enter` new line.
+
+## CLI
+
+The TUI is the primary interface, but every core action is scriptable:
+
+```text
+gitenv init <vault-directory>
+gitenv clone <git-url> <vault-directory>
+gitenv identity export <backup-file>
+gitenv identity import <backup-file>
+gitenv device request <device-name>
+gitenv device approve <request-id>
+gitenv device activate <request-id>
+gitenv link <project> <project-directory>
+gitenv capture <project> <profile>
+gitenv switch <project> <profile> [--force]
+gitenv status
+gitenv pull
+gitenv push
+gitenv version
+```
+
+## How it works
+
+- Each profile is the encrypted snapshot of a `.env` at capture time. `capture`
+  preserves the file byte-for-byte; `switch`/`apply` writes a profile back to the
+  project's `.env`.
+- The vault holds an age identity wrapped by your **master password**. The
+  unlocked identity is cached in the OS keychain when available, with a
+  restricted-permission local fallback.
+- The **vault remote is independent** of your project remotes. `gitenv` never
+  applies a profile or overwrites a `.env` during sync — pulling only updates the
+  vault; applying is always an explicit action.
+- A local `.env` with uncaptured changes is never silently overwritten: the CLI
+  requires `--force`, the TUI requires explicit confirmation.
+- Diffs are **value-free by default**. Literal values are only decrypted on an
+  explicit reveal, kept in memory, and dropped when you leave the view.
+
+## Security
+
+- Git stores only ciphertext, metadata, and wrapped key material — never plaintext secrets.
+- Losing **both** your master password and recovery key makes profiles cryptographically unrecoverable, by design.
+- Keep your recovery key somewhere separate from the machine (password manager, offline copy).
+
+## Development
+
+```bash
+go test ./...
+go build ./...
+```
+
+Release binaries are built by `scripts/build-release.sh` and published as GitHub
+release assets by `.github/workflows/release.yml` on `v*` tags.
+
+---
+
+## Português (pt-BR)
+
+`gitenv` guarda seus arquivos `.env` como **perfis criptografados** num
+repositório Git e oferece uma TUI para capturar, aplicar, editar e sincronizar
+esses perfis entre computadores. Os segredos são criptografados com
+[age](https://age-encryption.org); o Git só enxerga ciphertext, então o vault
+pode ficar em qualquer remoto privado (GitHub, GitLab, Gitea, self-hosted).
 
 ### Instalar
 
@@ -49,61 +177,41 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/EaeDave/gitenv/main/install.ps1 | iex
 ```
 
-Os instaladores detectam SO e arquitetura, baixam o binário estático correspondente da release mais recente no GitHub, verificam o checksum SHA-256 e instalam em `~/.local/bin` (Linux/macOS) ou `%LOCALAPPDATA%\gitenv\bin` (Windows). Defina `GITENV_VERSION` para fixar uma versão e `GITENV_INSTALL_DIR` para trocar o destino.
+Os instaladores detectam SO e arquitetura, baixam o binário estático da release
+mais recente, verificam o checksum SHA-256 e instalam em `~/.local/bin` ou
+`%LOCALAPPDATA%\gitenv\bin`. Use `GITENV_VERSION` para fixar uma versão e
+`GITENV_INSTALL_DIR` para trocar o destino. Para compilar do fonte (Go 1.24+):
+`go build -o gitenv ./cmd/gitenv`.
 
-### Compilar
+### Começando
 
-```bash
-go build -o gitenv ./cmd/gitenv
-```
-
-### Uso principal
-
-Entre em um projeto que já tenha `.env` e execute:
+Rode `gitenv` dentro de um projeto que já tenha `.env`:
 
 ```bash
 cd ~/dev/minha-api
 gitenv
 ```
 
-No primeiro uso, a TUI guia o processo completo:
+No primeiro uso a TUI conduz: criar (ou clonar) um vault protegido por senha
+mestra, configurar o remoto do vault, desbloquear (senha, recovery key ou
+aprovação de dispositivo), vincular o projeto atual sem sobrescrever o `.env` e
+capturar um perfil inicial. Depois é só aplicar, capturar, criar/remover perfis,
+sincronizar, revisar mudanças e editar o `.env` inline.
 
-1. criar um vault protegido por senha mestra ou clonar um existente;
-2. configurar o remoto Git do vault, se necessário;
-3. desbloquear com senha mestra, pedir aprovação a outro dispositivo ou colar a recovery key;
-4. detectar e vincular o projeto atual sem sobrescrever seu `.env`;
-5. capturar um perfil inicial ou aplicar explicitamente um perfil existente.
+### Como funciona
 
-Se não houver mais nenhuma credencial, escolha **Disconnect this vault and start again**. O vínculo/configuração local será limpo, mas o diretório do vault e o remoto Git não serão apagados.
+- Cada perfil é o snapshot criptografado de um `.env`. `capture` preserva o
+  arquivo byte a byte; `switch`/`apply` grava um perfil de volta no `.env`.
+- O vault guarda uma identidade age protegida pela **senha mestra**, cacheada no
+  cofre de credenciais do SO quando disponível.
+- O **remoto do vault é independente** dos remotos dos projetos. Sincronizar
+  nunca aplica um perfil nem sobrescreve um `.env`; aplicar é sempre explícito.
+- Um `.env` com mudanças não capturadas nunca é sobrescrito em silêncio.
+- Diffs são **sem valores por padrão** — o plaintext só é descriptografado sob
+  demanda (`x`), fica em memória e é descartado ao sair da tela.
 
-Depois, a tela principal responsiva permite aplicar/capturar/criar/remover perfis, sincronizar conforme o estado detectado, administrar o remoto do vault e exportar recovery. Em terminais largos, projetos e detalhes aparecem lado a lado; em terminais estreitos, os painéis são empilhados sem depender apenas de cores para comunicar estado.
+### Segurança
 
-Atalhos principais:
-
-```text
-enter  abrir projeto ou aplicar perfil
-a      adicionar projeto atual
-c      capturar perfil ativo
-n      criar perfil (dentro do projeto)
-d      remover perfil inativo (dentro do projeto)
-v      abrir visualizador completo das mudanças locais e do vault
-s      sincronizar conforme o estado remoto detectado
-p      pull explícito do vault (avançado)
-u      push explícito do vault (avançado)
-g      administrar remoto do vault (trocar/testar/remover)
-b      exportar recovery identity
-r      recarregar
-q      voltar ou sair
-```
-
-No visualizador, use `Tab`/`Shift+Tab` para selecionar o ambiente, `e` para editar o `.env` selecionado, `p` para publicar e `d` para descartar o ambiente selecionado, `x` para revelar/ocultar valores, `↑`/`↓` ou `j`/`k` para rolar, `PgUp`/`PgDn` para navegar por página, `Home`/`End` para ir ao início/fim e `Esc`/`q` para voltar. No editor, `ctrl+s` salva, `esc` cancela e `enter` cria nova linha.
-
-O comando `gitenv pull` atualiza somente o vault; arquivos `.env` locais continuam sendo aplicados explicitamente pela tela de perfis. A CLI permanece disponível para automação e recuperação.
-
-### Verificação
-
-```bash
-go test ./...
-go build ./...
-```
-<!-- business-readme:technical:end -->
+O Git só armazena ciphertext, metadados e chaves embrulhadas. Perder **ao mesmo
+tempo** a senha mestra e a recovery key torna os perfis irrecuperáveis, por
+design — guarde a recovery key em local separado da máquina.
