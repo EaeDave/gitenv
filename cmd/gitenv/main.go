@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/eaedave/gitenv/internal/app"
 	gitops "github.com/eaedave/gitenv/internal/git"
 	"github.com/eaedave/gitenv/internal/tui"
 	"github.com/eaedave/gitenv/internal/vault"
@@ -30,6 +31,8 @@ func run(args []string) error {
 		return cloneCommand(args[1:])
 	case "identity":
 		return identityCommand(args[1:])
+	case "device":
+		return deviceCommand(args[1:])
 	case "link":
 		return linkCommand(args[1:])
 	case "capture":
@@ -79,6 +82,9 @@ Usage:
   gitenv clone <git-url> <vault-directory>
   gitenv identity export <backup-file>
   gitenv identity import <backup-file>
+  gitenv device request <device-name>
+  gitenv device approve <request-id>
+  gitenv device activate <request-id>
   gitenv link <project> <project-directory>
   gitenv capture <project> <profile>
   gitenv switch <project> <profile> [--force]
@@ -162,34 +168,52 @@ func identityCommand(args []string) error {
 	}
 	switch args[0] {
 	case "export":
-		data, err := os.ReadFile(identityPath)
-		if err != nil {
-			return err
-		}
-		if _, err := os.Stat(target); err == nil {
-			return fmt.Errorf("refusing to overwrite %s", target)
-		}
-		if err := vault.WriteAtomic(target, data, 0o600); err != nil {
+		if err := app.ExportIdentity(target); err != nil {
 			return err
 		}
 		fmt.Printf("Recovery identity exported to %s; store it outside Git.\n", target)
 		return nil
 	case "import":
-		data, err := os.ReadFile(target)
-		if err != nil {
-			return err
-		}
-		identity, err := vault.ParseIdentity(data)
-		if err != nil {
-			return err
-		}
-		if err := vault.SaveIdentity(identity); err != nil {
+		if err := app.ImportIdentity(target); err != nil {
 			return err
 		}
 		fmt.Printf("Identity imported into %s\n", identityPath)
 		return nil
 	default:
 		return errors.New("usage: gitenv identity export|import <file>")
+	}
+}
+
+func deviceCommand(args []string) error {
+	if len(args) != 2 {
+		return errors.New("usage: gitenv device request <name>|approve <request-id>|activate <request-id>")
+	}
+	cfg, err := configured()
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "request":
+		request, err := app.RequestDeviceEnrollment(&cfg, args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Enrollment requested and pushed: %s\nApprove it on an authorized device, then activate it here.\n", request.ID)
+		return nil
+	case "approve":
+		if err := app.ApproveDeviceEnrollment(cfg, args[1]); err != nil {
+			return err
+		}
+		fmt.Printf("Enrollment approved and pushed: %s\nThe new device can activate now.\n", args[1])
+		return nil
+	case "activate":
+		if err := app.ActivateDeviceEnrollment(&cfg, args[1], vault.StoreIdentityKeychain); err != nil {
+			return err
+		}
+		fmt.Printf("Device activated: %s\n", args[1])
+		return nil
+	default:
+		return errors.New("usage: gitenv device request <name>|approve <request-id>|activate <request-id>")
 	}
 }
 

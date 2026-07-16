@@ -99,7 +99,7 @@ func LoadManifest(root string) (Manifest, error) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return Manifest{}, fmt.Errorf("invalid vault manifest: %w", err)
 	}
-	if manifest.Version != ManifestVersion {
+	if manifest.Version < 1 || manifest.Version > ManifestVersion {
 		return Manifest{}, fmt.Errorf("unsupported vault version %d", manifest.Version)
 	}
 	if manifest.Projects == nil {

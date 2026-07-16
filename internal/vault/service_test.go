@@ -107,3 +107,36 @@ func TestRemoveProfileRejectsActiveAndRemovesInactive(t *testing.T) {
 		t.Fatalf("profile file still exists: %v", err)
 	}
 }
+
+func TestLoadIdentityForManifestSkipsStaleSources(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("GITENV_CONFIG_DIR", filepath.Join(root, "config"))
+	allowed, err := GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveIdentityFallback(allowed); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveIdentityToKeychain(stale); err != nil {
+		t.Fatal(err)
+	}
+	SetSessionIdentity(stale)
+	t.Cleanup(ClearSessionIdentity)
+	manifest := Manifest{Recipients: []string{allowed.Recipient().String()}}
+	got, err := LoadIdentityForManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Recipient().String() != allowed.Recipient().String() {
+		t.Fatalf("selected recipient = %s, want %s", got.Recipient(), allowed.Recipient())
+	}
+	cached, err := LoadIdentity()
+	if err != nil || cached.Recipient().String() != allowed.Recipient().String() {
+		t.Fatalf("authorized fallback was not cached: identity=%v err=%v", cached, err)
+	}
+}

@@ -134,3 +134,7 @@ func commandError(err error, stdout, stderr string) error {
 	}
 	return fmt.Errorf("%s: %w", detail, err)
 }
+
+func RedactURL(value string) string {
+	return credentialsInURL.ReplaceAllString(value, `${1}***@`)
+}

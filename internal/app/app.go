@@ -12,10 +12,11 @@ import (
 )
 
 type CurrentProject struct {
-	Path       string
-	Name       string
-	HasEnv     bool
-	LinkedName string
+	Path               string
+	Name               string
+	HasEnv             bool
+	LinkedName         string
+	RepositoryIdentity string // canonical identity derived from the origin remote
 }
 
 func CreateVault(cfg *vault.LocalConfig, root, recoveryPath, remoteURL string) error {
@@ -84,10 +85,6 @@ func CloneVault(cfg *vault.LocalConfig, remoteURL, root, recoveryPath string) er
 }
 
 func ExportIdentity(target string) error {
-	identityPath, err := vault.IdentityPath()
-	if err != nil {
-		return err
-	}
 	absolute, err := filepath.Abs(expandHome(target))
 	if err != nil {
 		return err
@@ -95,11 +92,11 @@ func ExportIdentity(target string) error {
 	if _, err := os.Stat(absolute); err == nil {
 		return fmt.Errorf("refusing to overwrite %s", absolute)
 	}
-	data, err := os.ReadFile(identityPath)
+	identity, err := vault.LoadIdentity()
 	if err != nil {
 		return err
 	}
-	return vault.WriteAtomic(absolute, data, 0o600)
+	return vault.WriteAtomic(absolute, []byte(identity.String()+"\n"), 0o600)
 }
 
 func ImportIdentity(source string) error {
@@ -111,11 +108,30 @@ func ImportIdentity(source string) error {
 	if err != nil {
 		return err
 	}
-	identity, err := vault.ParseIdentity(data)
+	return ImportIdentityValue(string(data))
+}
+
+// ImportIdentityValue validates and stores a pasted age recovery identity.
+func ImportIdentityValue(value string) error {
+	identity, err := vault.ParseIdentity([]byte(strings.TrimSpace(value)))
 	if err != nil {
+		return fmt.Errorf("invalid recovery identity: %w", err)
+	}
+	if err := vault.StoreUnlockedIdentity(identity, vault.StoreIdentityFallback); err != nil {
 		return err
 	}
-	return vault.SaveIdentity(identity)
+	_ = vault.SaveIdentityToKeychain(identity)
+	return nil
+}
+
+// DisconnectVault forgets only this computer's vault and project mappings.
+// It never removes the vault directory or its Git remote.
+func DisconnectVault(cfg *vault.LocalConfig) error {
+	if cfg == nil {
+		return errors.New("local config is required")
+	}
+	*cfg = vault.LocalConfig{Projects: map[string]vault.LocalProject{}}
+	return vault.SaveLocal(*cfg)
 }
 
 func DetectCurrent(cfg vault.LocalConfig, cwd string) (CurrentProject, error) {
@@ -127,6 +143,11 @@ func DetectCurrent(cfg vault.LocalConfig, cwd string) (CurrentProject, error) {
 		absolute = gitRoot
 	}
 	current := CurrentProject{Path: absolute, Name: filepath.Base(absolute)}
+	// Populate canonical repository identity from the application repo's origin
+	// remote (best-effort: empty when the directory has no git remote).
+	if rawURL, urlErr := gitops.RemoteURL(absolute, "origin"); urlErr == nil {
+		current.RepositoryIdentity = gitops.NormalizeRemoteURL(rawURL)
+	}
 	if _, err := os.Stat(filepath.Join(absolute, ".env")); err == nil {
 		current.HasEnv = true
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -137,8 +158,27 @@ func DetectCurrent(cfg vault.LocalConfig, cwd string) (CurrentProject, error) {
 			current.LinkedName = name
 			break
 		}
+		// Exact remote identity match auto-links even when the local path differs.
+		if current.RepositoryIdentity != "" && current.RepositoryIdentity == project.RepositoryIdentity {
+			current.LinkedName = name
+			break
+		}
 	}
 	return current, nil
+}
+
+func MatchVaultProject(manifest vault.Manifest, current CurrentProject) string {
+	if current.RepositoryIdentity == "" {
+		return ""
+	}
+	for name, project := range manifest.Projects {
+		for _, repository := range project.Repositories {
+			if repository == current.RepositoryIdentity {
+				return name
+			}
+		}
+	}
+	return ""
 }
 
 func AddCurrentProject(cfg *vault.LocalConfig, current CurrentProject, name, profile string) error {
@@ -148,8 +188,27 @@ func AddCurrentProject(cfg *vault.LocalConfig, current CurrentProject, name, pro
 	if err := vault.Link(cfg, name, current.Path); err != nil {
 		return err
 	}
+	// Persist the canonical repository identity so future DetectCurrent calls
+	// can auto-link clones at different local paths.
+	if current.RepositoryIdentity != "" {
+		lp := cfg.Projects[name]
+		lp.RepositoryIdentity = current.RepositoryIdentity
+		cfg.Projects[name] = lp
+	}
 	if err := vault.SaveLocal(*cfg); err != nil {
 		return err
+	}
+	if current.RepositoryIdentity != "" {
+		manifest, err := vault.LoadManifest(cfg.VaultPath)
+		if err != nil {
+			return err
+		}
+		entry := manifest.Projects[name]
+		entry.Repositories = appendUnique(entry.Repositories, current.RepositoryIdentity)
+		manifest.Projects[name] = entry
+		if err := vault.SaveManifest(cfg.VaultPath, manifest); err != nil {
+			return err
+		}
 	}
 	return vault.Capture(cfg, name, profile)
 }
@@ -169,6 +228,16 @@ func LinkExistingProject(cfg *vault.LocalConfig, current CurrentProject, name, p
 	if err := vault.Link(cfg, name, current.Path); err != nil {
 		return err
 	}
+	if current.RepositoryIdentity != "" {
+		local := cfg.Projects[name]
+		local.RepositoryIdentity = current.RepositoryIdentity
+		cfg.Projects[name] = local
+		project.Repositories = appendUnique(project.Repositories, current.RepositoryIdentity)
+		manifest.Projects[name] = project
+		if err := vault.SaveManifest(cfg.VaultPath, manifest); err != nil {
+			return err
+		}
+	}
 	if err := vault.SaveLocal(*cfg); err != nil {
 		return err
 	}
@@ -180,6 +249,15 @@ func AddRemote(cfg vault.LocalConfig, remoteURL string) error {
 		return errors.New("no vault configured")
 	}
 	return gitops.AddRemote(cfg.VaultPath, "origin", remoteURL)
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func Pull(cfg vault.LocalConfig) error { return gitops.Pull(cfg.VaultPath) }

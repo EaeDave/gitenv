@@ -132,6 +132,36 @@ func TestCloneVaultImportsRecovery(t *testing.T) {
 	}
 }
 
+func TestImportIdentityValueAndDisconnectVault(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("GITENV_CONFIG_DIR", filepath.Join(root, "config"))
+	identity, err := vault.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ImportIdentityValue("  \n" + identity.String() + "\n  "); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := vault.LoadIdentity()
+	if err != nil || loaded.Recipient().String() != identity.Recipient().String() {
+		t.Fatalf("pasted identity was not stored: identity=%v err=%v", loaded, err)
+	}
+	if err := ImportIdentityValue("not-an-age-key"); err == nil {
+		t.Fatal("invalid pasted identity was accepted")
+	}
+	cfg := vault.LocalConfig{VaultPath: filepath.Join(root, "vault"), Projects: map[string]vault.LocalProject{"api": {Path: root}}, PendingEnrollmentID: "pending"}
+	if err := DisconnectVault(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.VaultPath != "" || cfg.PendingEnrollmentID != "" || len(cfg.Projects) != 0 {
+		t.Fatalf("local vault state was not cleared: %#v", cfg)
+	}
+	stored, err := vault.LoadLocal()
+	if err != nil || stored.VaultPath != "" || len(stored.Projects) != 0 {
+		t.Fatalf("disconnected state was not persisted: %#v err=%v", stored, err)
+	}
+}
+
 func TestAddCurrentRejectsDirectoryWithoutEnv(t *testing.T) {
 	root := t.TempDir()
 	cfg := vault.LocalConfig{Projects: map[string]vault.LocalProject{}}

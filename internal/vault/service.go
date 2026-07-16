@@ -44,7 +44,7 @@ func Link(cfg *LocalConfig, project, path string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("project path is not a directory: %s", absolute)
 	}
-	cfg.Projects[project] = LocalProject{Path: absolute, ActiveProfile: cfg.Projects[project].ActiveProfile}
+	cfg.Projects[project] = LocalProject{Path: absolute, ActiveProfile: cfg.Projects[project].ActiveProfile, RepositoryIdentity: cfg.Projects[project].RepositoryIdentity}
 	return nil
 }
 

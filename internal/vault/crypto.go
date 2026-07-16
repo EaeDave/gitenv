@@ -7,9 +7,25 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"filippo.io/age"
 )
+
+var (
+	sessionIdentityMu sync.RWMutex
+	sessionIdentity   *age.X25519Identity
+)
+
+func SetSessionIdentity(identity *age.X25519Identity) {
+	sessionIdentityMu.Lock()
+	sessionIdentity = identity
+	sessionIdentityMu.Unlock()
+}
+
+func ClearSessionIdentity() {
+	SetSessionIdentity(nil)
+}
 
 func GenerateIdentity() (*age.X25519Identity, error) {
 	return age.GenerateX25519Identity()
@@ -29,6 +45,19 @@ func SaveIdentity(identity *age.X25519Identity) error {
 }
 
 func LoadIdentity() (*age.X25519Identity, error) {
+	sessionIdentityMu.RLock()
+	identity := sessionIdentity
+	sessionIdentityMu.RUnlock()
+	if identity != nil {
+		return identity, nil
+	}
+	if identity, err := LoadIdentityFromKeychain(); err == nil {
+		return identity, nil
+	}
+	return loadIdentityFallback()
+}
+
+func loadIdentityFallback() (*age.X25519Identity, error) {
 	path, err := IdentityPath()
 	if err != nil {
 		return nil, err
@@ -37,11 +66,36 @@ func LoadIdentity() (*age.X25519Identity, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read identity %s: %w", path, err)
 	}
-	identity, err := age.ParseX25519Identity(strings.TrimSpace(string(data)))
+	parsed, err := age.ParseX25519Identity(strings.TrimSpace(string(data)))
 	if err != nil {
 		return nil, fmt.Errorf("parse identity: %w", err)
 	}
-	return identity, nil
+	return parsed, nil
+}
+
+// LoadIdentityForManifest skips stale credential sources and caches the first
+// identity authorized by the manifest for subsequent vault operations.
+func LoadIdentityForManifest(manifest Manifest) (*age.X25519Identity, error) {
+	sessionIdentityMu.RLock()
+	session := sessionIdentity
+	sessionIdentityMu.RUnlock()
+	candidates := make([]*age.X25519Identity, 0, 3)
+	if session != nil {
+		candidates = append(candidates, session)
+	}
+	if identity, err := LoadIdentityFromKeychain(); err == nil && identity != session {
+		candidates = append(candidates, identity)
+	}
+	if identity, err := loadIdentityFallback(); err == nil {
+		candidates = append(candidates, identity)
+	}
+	for _, identity := range candidates {
+		if IdentityUnlocks(manifest, identity) {
+			SetSessionIdentity(identity)
+			return identity, nil
+		}
+	}
+	return nil, errors.New("no stored identity is authorized for this vault")
 }
 
 func ParseIdentity(data []byte) (*age.X25519Identity, error) {

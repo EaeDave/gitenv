@@ -26,20 +26,40 @@ const (
 	screenAddProject
 	screenProfiles
 	screenNewProfile
-	screenRemote
-	screenRecovery
+	screenRemote              // cursor menu: Change / Test / Remove / Back
+	screenRemoteChange        // form: vault sync repository URL
+	screenConfirmRemoveRemote // y/N: remove vault sync repository
+	screenMigrate             // form: password / confirm / device — protect unprotected vault
+	screenUnlock              // cursor menu: password / enrollment / import-recovery
+	screenUnlockPassword      // form: master password (masked)
+	screenEnrollRequest       // form: device name → RequestDeviceEnrollment
+	screenImportRecovery      // form: pasted recovery identity → ImportIdentityValue
+	screenRecovery            // form: export recovery identity (b key)
+	screenConfirmDisconnect
 	screenConfirm
 	screenConfirmDelete
 )
 
-type field struct{ label, value string }
+type field struct {
+	label  string
+	value  string
+	masked bool
+}
+
 type operationMsg struct {
 	info string
 	err  error
 }
+
 type reloadMsg struct {
-	manifest vault.Manifest
-	statuses map[string]string
+	manifest                 vault.Manifest
+	statuses                 map[string]string
+	current                  app.CurrentProject
+	remoteURL                string // raw URL, only when safe to prefill (no credentials)
+	remoteDisplayURL         string // redacted URL for display
+	needsMigration           bool
+	migrationIdentityMissing bool
+	needsUnlock              bool
 }
 
 type model struct {
@@ -55,6 +75,10 @@ type model struct {
 	fields                                                []field
 	info, errText                                         string
 	busy                                                  bool
+	remoteURL                                             string // safe prefill URL (no embedded credentials)
+	remoteDisplayURL                                      string // redacted display URL
+	accessRequired                                        bool
+	migrationRecoveryRequired                             bool
 }
 
 func newModel(cfg *vault.LocalConfig, cwd string) model {
@@ -75,14 +99,43 @@ func (m model) Init() tea.Cmd {
 	if m.cfg.VaultPath == "" {
 		return nil
 	}
-	return loadCmd(m.cfg)
+	return loadCmd(m.cfg, m.cwd)
 }
 
-func loadCmd(cfg *vault.LocalConfig) tea.Cmd {
+func loadCmd(cfg *vault.LocalConfig, cwd string) tea.Cmd {
 	return func() tea.Msg {
 		manifest, err := vault.LoadManifest(cfg.VaultPath)
 		if err != nil {
 			return operationMsg{err: err}
+		}
+		current, err := app.DetectCurrent(*cfg, cwd)
+		if err != nil {
+			return operationMsg{err: err}
+		}
+		identity, identityErr := vault.LoadIdentityForManifest(manifest)
+		identityAllowed := identityErr == nil && identity != nil
+		if manifest.WrappedIdentity == nil {
+			if !identityAllowed {
+				return reloadMsg{manifest: manifest, current: current, migrationIdentityMissing: true}
+			}
+			return reloadMsg{manifest: manifest, current: current, needsMigration: true}
+		}
+		if !identityAllowed {
+			return reloadMsg{manifest: manifest, current: current, needsUnlock: true}
+		}
+		if current.LinkedName == "" {
+			if match := app.MatchVaultProject(manifest, current); match != "" {
+				if err := vault.Link(cfg, match, current.Path); err != nil {
+					return operationMsg{err: err}
+				}
+				local := cfg.Projects[match]
+				local.RepositoryIdentity = current.RepositoryIdentity
+				cfg.Projects[match] = local
+				if err := vault.SaveLocal(*cfg); err != nil {
+					return operationMsg{err: err}
+				}
+				current.LinkedName = match
+			}
 		}
 		statuses := make(map[string]string, len(cfg.Projects))
 		for name := range cfg.Projects {
@@ -93,7 +146,19 @@ func loadCmd(cfg *vault.LocalConfig) tea.Cmd {
 				statuses[name] = status
 			}
 		}
-		return reloadMsg{manifest: manifest, statuses: statuses}
+		rawURL, rawErr := app.VaultRemoteURL(*cfg)
+		displayURL := app.VaultRemoteDisplayURL(*cfg)
+		prefillURL := ""
+		if rawErr == nil && rawURL == displayURL {
+			prefillURL = rawURL
+		}
+		return reloadMsg{
+			manifest:         manifest,
+			statuses:         statuses,
+			current:          current,
+			remoteURL:        prefillURL,
+			remoteDisplayURL: displayURL,
+		}
 	}
 }
 
@@ -113,13 +178,45 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.manifest = msg.manifest
 		m.statuses = msg.statuses
 		m.projects = sortedKeys(m.cfg.Projects)
+		m.current = msg.current
+		m.remoteURL = msg.remoteURL
+		m.remoteDisplayURL = msg.remoteDisplayURL
 		if m.selectedProject != "" {
 			m.profiles = sortedKeys(m.manifest.Projects[m.selectedProject].Profiles)
 			if m.profileCursor >= len(m.profiles) {
 				m.profileCursor = max(0, len(m.profiles)-1)
 			}
 		}
+		m.accessRequired = msg.migrationIdentityMissing || msg.needsMigration || msg.needsUnlock
+		m.migrationRecoveryRequired = msg.migrationIdentityMissing
+		if msg.migrationIdentityMissing {
+			m.screen = screenUnlock
+			m.menuCursor = 0
+			m.fields = nil
+			m.errText = "vault recovery identity is required before migration"
+			return m, nil
+		}
+		if msg.needsMigration {
+			hostname, _ := os.Hostname()
+			m.screen = screenMigrate
+			m.fields = []field{
+				{"Master password", "", true},
+				{"Confirm password", "", true},
+				{"Device name", hostname, false},
+			}
+			m.fieldCursor = 0
+			return m, nil
+		}
+		if msg.needsUnlock {
+			m.screen = screenUnlock
+			m.menuCursor = 0
+			m.fields = nil
+			return m, nil
+		}
+		m.accessRequired = false
+		m.migrationRecoveryRequired = false
 		return m, nil
+
 	case operationMsg:
 		m.busy = false
 		if msg.err != nil {
@@ -128,16 +225,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.info = msg.info
 		if m.cfg.VaultPath != "" {
-			if m.screen == screenCreate || m.screen == screenClone {
+			switch m.screen {
+			case screenCreate, screenClone,
+				screenAddProject, screenNewProfile,
+				screenRemoteChange, screenConfirmRemoveRemote,
+				screenMigrate, screenUnlock, screenUnlockPassword,
+				screenImportRecovery, screenRecovery:
 				m.screen = screenProjects
+			case screenEnrollRequest:
+				m.screen = screenUnlock
 			}
-			if m.screen == screenAddProject || m.screen == screenNewProfile || m.screen == screenRemote || m.screen == screenRecovery {
-				m.screen = screenProjects
-			}
-			current, _ := app.DetectCurrent(*m.cfg, m.cwd)
-			m.current = current
-			return m, loadCmd(m.cfg)
+			return m, loadCmd(m.cfg, m.cwd)
 		}
+
 	case tea.KeyMsg:
 		if m.busy {
 			if msg.String() == "ctrl+c" {
@@ -159,12 +259,22 @@ func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case screenOnboarding:
 		return m.onboardingKey(key)
-	case screenCreate, screenClone, screenAddProject, screenNewProfile, screenRemote, screenRecovery:
+	case screenCreate, screenClone, screenAddProject, screenNewProfile,
+		screenRemoteChange, screenMigrate, screenUnlockPassword,
+		screenEnrollRequest, screenImportRecovery, screenRecovery:
 		return m.formKey(key)
 	case screenProjects:
 		return m.projectsKey(key)
 	case screenProfiles:
 		return m.profilesKey(key)
+	case screenRemote:
+		return m.remoteMenuKey(key)
+	case screenUnlock:
+		return m.unlockMenuKey(key)
+	case screenConfirmRemoveRemote:
+		return m.confirmRemoveRemoteKey(key)
+	case screenConfirmDisconnect:
+		return m.confirmDisconnectKey(key)
 	case screenConfirm:
 		return m.confirmKey(key)
 	case screenConfirmDelete:
@@ -187,15 +297,23 @@ func (m model) onboardingKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.menuCursor++
 		}
 	case "enter":
+		configDir, _ := vault.ConfigDir()
 		if m.menuCursor == 0 {
-			configDir, _ := vault.ConfigDir()
-			home, _ := os.UserHomeDir()
+			hostname, _ := os.Hostname()
 			m.screen = screenCreate
-			m.fields = []field{{"Vault directory", filepath.Join(configDir, "vault")}, {"Recovery backup", filepath.Join(home, "gitenv-recovery.txt")}, {"Git remote (optional)", ""}}
+			m.fields = []field{
+				{"Vault directory", filepath.Join(configDir, "vault"), false},
+				{"Master password", "", true},
+				{"Confirm password", "", true},
+				{"Device name", hostname, false},
+				{"Vault sync repository (optional)", "", false},
+			}
 		} else {
-			configDir, _ := vault.ConfigDir()
 			m.screen = screenClone
-			m.fields = []field{{"Git remote URL", ""}, {"Vault directory", filepath.Join(configDir, "vault")}, {"Recovery identity", ""}}
+			m.fields = []field{
+				{"Vault sync repository URL", "", false},
+				{"Vault directory", filepath.Join(configDir, "vault"), false},
+			}
 		}
 		m.fieldCursor = 0
 	}
@@ -205,12 +323,30 @@ func (m model) onboardingKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) formKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "esc":
-		if m.cfg.VaultPath == "" {
-			m.screen = screenOnboarding
-		} else if m.selectedProject != "" {
-			m.screen = screenProfiles
-		} else {
-			m.screen = screenProjects
+		if m.accessRequired {
+			switch m.screen {
+			case screenUnlockPassword, screenEnrollRequest:
+				m.screen = screenUnlock
+				m.fields = nil
+			case screenImportRecovery:
+				m.screen = screenUnlock
+				m.fields = nil
+			case screenMigrate:
+				m.errText = "migration is required before the vault can be used"
+			}
+			return m, nil
+		}
+		switch m.screen {
+		case screenRemoteChange:
+			m.screen = screenRemote
+		default:
+			if m.cfg.VaultPath == "" {
+				m.screen = screenOnboarding
+			} else if m.selectedProject != "" {
+				m.screen = screenProfiles
+			} else {
+				m.screen = screenProjects
+			}
 		}
 		m.fields = nil
 		return m, nil
@@ -243,19 +379,55 @@ func (m model) submitForm() (tea.Model, tea.Cmd) {
 	m.busy = true
 	switch m.screen {
 	case screenCreate:
-		return m, opCmd(func() error { return app.CreateVault(m.cfg, values[0], values[1], values[2]) }, "vault created; recovery identity exported")
+		// [0]=dir [1]=password [2]=confirm [3]=device [4]=remote
+		return m, opCmd(func() error {
+			return app.CreateProtectedVault(m.cfg, values[0], values[1], values[2], values[4], values[3], vault.StoreIdentityKeychain)
+		}, "vault created")
 	case screenClone:
-		return m, opCmd(func() error { return app.CloneVault(m.cfg, values[0], values[1], values[2]) }, "vault cloned and unlocked")
+		// [0]=url [1]=dir
+		return m, opCmd(func() error {
+			return app.CloneLockedVault(m.cfg, values[0], values[1])
+		}, "vault cloned")
 	case screenAddProject:
 		if _, exists := m.manifest.Projects[values[0]]; exists {
-			return m, opCmd(func() error { return app.LinkExistingProject(m.cfg, m.current, values[0], values[1]) }, "existing project linked and profile applied")
+			return m, opCmd(func() error {
+				return app.LinkExistingProject(m.cfg, m.current, values[0], values[1])
+			}, "existing project linked and profile applied")
 		}
-		return m, opCmd(func() error { return app.AddCurrentProject(m.cfg, m.current, values[0], values[1]) }, "new project added and .env captured")
+		return m, opCmd(func() error {
+			return app.AddCurrentProject(m.cfg, m.current, values[0], values[1])
+		}, "new project added and .env captured")
 	case screenNewProfile:
 		project := m.selectedProject
 		return m, opCmd(func() error { return vault.Capture(m.cfg, project, values[0]) }, "new profile captured")
-	case screenRemote:
-		return m, opCmd(func() error { return app.AddRemote(*m.cfg, values[0]) }, "Git remote configured")
+	case screenRemoteChange:
+		cfg := *m.cfg
+		return m, opCmd(func() error {
+			return app.ConfigureVaultRemote(cfg, values[0])
+		}, "vault sync repository configured")
+	case screenMigrate:
+		// [0]=password [1]=confirm [2]=device
+		cfg := *m.cfg
+		return m, opCmd(func() error {
+			return app.MigrateVaultAccess(cfg, values[0], values[1], values[2], vault.StoreIdentityKeychain)
+		}, "vault access migrated")
+	case screenUnlockPassword:
+		vaultPath := m.cfg.VaultPath
+		return m, opCmd(func() error {
+			return vault.UnlockVault(vaultPath, values[0], vault.StoreIdentityKeychain)
+		}, "vault unlocked")
+	case screenEnrollRequest:
+		cfg := m.cfg
+		name := values[0]
+		return m, func() tea.Msg {
+			req, err := app.RequestDeviceEnrollment(cfg, name)
+			if err != nil {
+				return operationMsg{err: err}
+			}
+			return operationMsg{info: "enrollment requested — ID: " + req.ID}
+		}
+	case screenImportRecovery:
+		return m, opCmd(func() error { return app.ImportIdentityValue(values[0]) }, "recovery identity imported")
 	case screenRecovery:
 		return m, opCmd(func() error { return app.ExportIdentity(values[0]) }, "recovery identity exported")
 	}
@@ -293,18 +465,16 @@ func (m model) projectsKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.screen = screenAddProject
 		projectName, profileName := m.current.Name, "dev"
-		for _, candidate := range sortedKeys(m.manifest.Projects) {
-			if _, linked := m.cfg.Projects[candidate]; linked {
-				continue
+		if candidate, exists := m.manifest.Projects[m.current.Name]; exists {
+			if _, linked := m.cfg.Projects[m.current.Name]; !linked {
+				projectName = m.current.Name
+				profiles := sortedKeys(candidate.Profiles)
+				if len(profiles) > 0 {
+					profileName = profiles[0]
+				}
 			}
-			projectName = candidate
-			profiles := sortedKeys(m.manifest.Projects[candidate].Profiles)
-			if len(profiles) > 0 {
-				profileName = profiles[0]
-			}
-			break
 		}
-		m.fields = []field{{"Project name", projectName}, {"Initial profile", profileName}}
+		m.fields = []field{{"Project name", projectName, false}, {"Initial profile", profileName, false}}
 		m.fieldCursor = 0
 	case "c":
 		if len(m.projects) == 0 {
@@ -320,33 +490,107 @@ func (m model) projectsKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, opCmd(func() error { return vault.Capture(m.cfg, project, active) }, "profile captured")
 	case "p":
 		if !app.HasRemote(*m.cfg) {
-			m.errText = "configure a Git remote first with g"
+			m.errText = "configure a vault sync repository first with g"
 			break
 		}
 		m.busy = true
 		return m, opCmd(func() error { return app.Pull(*m.cfg) }, "vault pulled; local .env files unchanged")
 	case "u":
 		if !app.HasRemote(*m.cfg) {
-			m.errText = "configure a Git remote first with g"
+			m.errText = "configure a vault sync repository first with g"
 			break
 		}
 		m.busy = true
 		return m, opCmd(func() error { return app.Push(*m.cfg) }, "vault pushed")
 	case "g":
-		if app.HasRemote(*m.cfg) {
-			m.errText = "origin remote is already configured"
-			break
-		}
 		m.screen = screenRemote
-		m.fields = []field{{"Git remote URL", ""}}
-		m.fieldCursor = 0
+		m.menuCursor = 0
 	case "b":
 		home, _ := os.UserHomeDir()
 		m.screen = screenRecovery
-		m.fields = []field{{"Recovery backup path", filepath.Join(home, "gitenv-recovery.txt")}}
+		m.fields = []field{{"Recovery backup path", filepath.Join(home, "gitenv-recovery.txt"), false}}
 		m.fieldCursor = 0
 	case "r":
-		return m, loadCmd(m.cfg)
+		return m, loadCmd(m.cfg, m.cwd)
+	}
+	return m, nil
+}
+
+func (m model) remoteMenuKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	items := 4
+	switch key.String() {
+	case "esc", "q":
+		m.screen = screenProjects
+	case "up", "k":
+		if m.menuCursor > 0 {
+			m.menuCursor--
+		}
+	case "down", "j":
+		if m.menuCursor < items-1 {
+			m.menuCursor++
+		}
+	case "enter":
+		switch m.menuCursor {
+		case 0: // Change
+			m.screen = screenRemoteChange
+			m.fields = []field{{"Vault sync repository URL", m.remoteURL, false}}
+			m.fieldCursor = 0
+		case 1: // Test
+			cfg := *m.cfg
+			m.busy = true
+			return m, opCmd(func() error { return app.TestVaultRemote(cfg) }, "vault sync repository is reachable")
+		case 2: // Remove
+			m.screen = screenConfirmRemoveRemote
+		case 3: // Back
+			m.screen = screenProjects
+		}
+	}
+	return m, nil
+}
+
+func (m model) unlockMenuKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	items := 4
+	switch key.String() {
+	case "esc", "q":
+		m.errText = "unlock or disconnect the vault before continuing"
+	case "up", "k":
+		if m.menuCursor > 0 {
+			m.menuCursor--
+		}
+	case "down", "j":
+		if m.menuCursor < items-1 {
+			m.menuCursor++
+		}
+	case "enter":
+		switch m.menuCursor {
+		case 0: // Unlock with master password
+			if m.migrationRecoveryRequired {
+				m.errText = "this legacy vault has no master password; use recovery or device approval"
+				break
+			}
+			m.screen = screenUnlockPassword
+			m.fields = []field{{"Master password", "", true}}
+			m.fieldCursor = 0
+		case 1:
+			if m.cfg.PendingEnrollmentID != "" {
+				cfg := m.cfg
+				requestID := cfg.PendingEnrollmentID
+				m.busy = true
+				return m, opCmd(func() error {
+					return app.ActivateDeviceEnrollment(cfg, requestID, vault.StoreIdentityKeychain)
+				}, "device enrollment activated; vault is now accessible")
+			}
+			hostname, _ := os.Hostname()
+			m.screen = screenEnrollRequest
+			m.fields = []field{{"Device name", hostname, false}}
+			m.fieldCursor = 0
+		case 2: // Import recovery identity (advanced)
+			m.screen = screenImportRecovery
+			m.fields = []field{{"Recovery key", "", true}}
+			m.fieldCursor = 0
+		case 3:
+			m.screen = screenConfirmDisconnect
+		}
 	}
 	return m, nil
 }
@@ -388,7 +632,7 @@ func (m model) profilesKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, opCmd(func() error { return vault.Capture(m.cfg, project, active) }, "profile captured")
 	case "n":
 		m.screen = screenNewProfile
-		m.fields = []field{{"New profile name", ""}}
+		m.fields = []field{{"New profile name", "", false}}
 		m.fieldCursor = 0
 	case "d":
 		if len(m.profiles) == 0 {
@@ -410,7 +654,9 @@ func (m model) confirmKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		project, profile := m.selectedProject, m.pendingProfile
 		m.screen = screenProfiles
 		m.busy = true
-		return m, opCmd(func() error { return vault.Apply(m.cfg, project, profile, true) }, "profile applied; local changes discarded")
+		return m, opCmd(func() error {
+			return vault.Apply(m.cfg, project, profile, true)
+		}, "profile applied; local changes discarded")
 	}
 	m.screen = screenProfiles
 	m.pendingProfile = ""
@@ -432,6 +678,28 @@ func (m model) confirmDeleteKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) confirmRemoveRemoteKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if key.String() == "y" || key.String() == "Y" {
+		cfg := *m.cfg
+		m.busy = true
+		return m, opCmd(func() error { return app.RemoveVaultRemote(cfg) }, "vault sync repository removed")
+	}
+	m.screen = screenRemote
+	m.info = "cancelled"
+	return m, nil
+}
+
+func (m model) confirmDisconnectKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if key.String() == "y" || key.String() == "Y" {
+		m.screen = screenOnboarding
+		m.busy = true
+		return m, opCmd(func() error { return app.DisconnectVault(m.cfg) }, "vault disconnected from this computer")
+	}
+	m.screen = screenUnlock
+	m.info = "cancelled"
+	return m, nil
+}
+
 func (m model) View() string {
 	var b strings.Builder
 	b.WriteString("gitenv")
@@ -443,7 +711,7 @@ func (m model) View() string {
 	case screenOnboarding:
 		m.viewOnboarding(&b)
 	case screenCreate:
-		m.viewForm(&b, "Create a new encrypted vault")
+		m.viewForm(&b, "Create a new protected vault")
 	case screenClone:
 		m.viewForm(&b, "Clone an existing vault")
 	case screenAddProject:
@@ -451,7 +719,19 @@ func (m model) View() string {
 	case screenNewProfile:
 		m.viewForm(&b, "Capture .env as a new profile")
 	case screenRemote:
-		m.viewForm(&b, "Configure Git remote")
+		m.viewRemoteMenu(&b)
+	case screenRemoteChange:
+		m.viewForm(&b, "Vault sync repository")
+	case screenMigrate:
+		m.viewForm(&b, "Migrate vault to protected access")
+	case screenUnlock:
+		m.viewUnlockMenu(&b)
+	case screenUnlockPassword:
+		m.viewForm(&b, "Unlock vault")
+	case screenEnrollRequest:
+		m.viewForm(&b, "Request device approval")
+	case screenImportRecovery:
+		m.viewForm(&b, "Paste recovery identity")
 	case screenRecovery:
 		m.viewForm(&b, "Export recovery identity")
 	case screenProjects:
@@ -462,6 +742,10 @@ func (m model) View() string {
 		fmt.Fprintf(&b, "Local .env has uncaptured content.\nApply %q and discard it? [y/N]\n", m.pendingProfile)
 	case screenConfirmDelete:
 		fmt.Fprintf(&b, "Remove encrypted profile %q? This cannot be undone. [y/N]\n", m.pendingProfile)
+	case screenConfirmRemoveRemote:
+		fmt.Fprintln(&b, "Remove vault sync repository? [y/N]")
+	case screenConfirmDisconnect:
+		fmt.Fprintln(&b, "Disconnect this vault from this computer?\nEncrypted vault files and its remote will not be deleted. [y/N]")
 	}
 	if m.info != "" {
 		b.WriteString("\n✓ " + m.info + "\n")
@@ -492,9 +776,60 @@ func (m model) viewForm(b *strings.Builder, title string) {
 		if i == m.fieldCursor {
 			cursor = "▶ "
 		}
-		fmt.Fprintf(b, "%s%-24s %s%s\n", cursor, f.label+":", f.value, inputCursor(i == m.fieldCursor))
+		displayValue := f.value
+		if f.masked {
+			displayValue = strings.Repeat("*", utf8.RuneCountInString(f.value))
+		}
+		fmt.Fprintf(b, "%s%-28s %s%s\n", cursor, f.label+":", displayValue, inputCursor(i == m.fieldCursor))
 	}
 	b.WriteString("\nTab next field  Enter confirm  Ctrl+U clear  Esc cancel\n")
+}
+
+func (m model) viewRemoteMenu(b *strings.Builder) {
+	if m.remoteDisplayURL == "" {
+		b.WriteString("Vault sync repository: (none)\n\n")
+	} else {
+		b.WriteString("Vault sync repository: " + m.remoteDisplayURL + "\n\n")
+	}
+	items := []string{"Change", "Test", "Remove", "Back"}
+	for i, item := range items {
+		cursor := "  "
+		if i == m.menuCursor {
+			cursor = "▶ "
+		}
+		b.WriteString(cursor + item + "\n")
+	}
+	b.WriteString("\n↑↓ select  enter confirm  esc back\n")
+}
+
+func (m model) viewUnlockMenu(b *strings.Builder) {
+	b.WriteString("Vault access is required. Choose an option:\n\n")
+	passwordOption := "Unlock with master password"
+	if m.migrationRecoveryRequired {
+		passwordOption = "Master password unavailable for this legacy vault"
+	}
+	approvalOption := "Request approval from another device"
+	if id := m.cfg.PendingEnrollmentID; id != "" {
+		short := id
+		if len(short) > 8 {
+			short = short[:8] + "…"
+		}
+		approvalOption = "Check pending device approval (" + short + ")"
+	}
+	items := []string{
+		passwordOption,
+		approvalOption,
+		"Paste recovery key (advanced)",
+		"Disconnect this vault and start again",
+	}
+	for i, item := range items {
+		cursor := "  "
+		if i == m.menuCursor {
+			cursor = "▶ "
+		}
+		b.WriteString(cursor + item + "\n")
+	}
+	b.WriteString("\n↑↓ select  enter confirm  esc back\n")
 }
 
 func (m model) viewProjects(b *strings.Builder) {
@@ -520,13 +855,14 @@ func (m model) viewProjects(b *strings.Builder) {
 		}
 		fmt.Fprintf(b, "%s%-22s %-14s %s\n", cursor, name, active, m.statuses[name])
 	}
-	b.WriteString("\nenter profiles  a add current  c capture  p pull  u push\n")
-	b.WriteString("g remote  b recovery backup  r reload  q quit\n")
+	b.WriteString("\nenter profiles  a add current  c capture  p vault pull  u vault push\n")
+	b.WriteString("g vault sync  b recovery options  r reload  q quit\n")
 }
 
 func (m model) viewProfiles(b *strings.Builder) {
 	local := m.cfg.Projects[m.selectedProject]
-	fmt.Fprintf(b, "%s\nPath: %s\nActive: %s  Status: %s\n\n", m.selectedProject, local.Path, local.ActiveProfile, m.statuses[m.selectedProject])
+	fmt.Fprintf(b, "%s\nPath: %s\nActive: %s  Status: %s\n\n",
+		m.selectedProject, local.Path, local.ActiveProfile, m.statuses[m.selectedProject])
 	for i, profile := range m.profiles {
 		cursor := "  "
 		if i == m.profileCursor {
@@ -547,6 +883,7 @@ func inputCursor(active bool) string {
 	}
 	return ""
 }
+
 func sortedKeys[V any](values map[string]V) []string {
 	keys := make([]string, 0, len(values))
 	for key := range values {
@@ -555,6 +892,7 @@ func sortedKeys[V any](values map[string]V) []string {
 	sort.Strings(keys)
 	return keys
 }
+
 func safeError(err error) string {
 	if err == nil {
 		return ""
