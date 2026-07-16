@@ -1,0 +1,8 @@
+# Plaintext env files must never live in this vault.
+*.plaintext
+identity.txt
+
+# Local build and test artifacts.
+/gitenv
+/envgit
+/gitenv.json
