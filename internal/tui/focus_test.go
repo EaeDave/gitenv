@@ -6,6 +6,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/eaedave/gitenv/internal/app"
+	gitops "github.com/eaedave/gitenv/internal/git"
 	"github.com/eaedave/gitenv/internal/vault"
 )
 
@@ -135,5 +136,27 @@ func TestReloadFocusesAfterMigrationCompletes(t *testing.T) {
 	ready, _ := got.Update(focusReloadMsg())
 	if focused := ready.(model); focused.screen != screenProfiles || focused.selectedProject != "api" || !focused.landed {
 		t.Fatalf("focus was not restored after migration: %#v", focused)
+	}
+}
+
+func TestProfilesReloadRechecksStatus(t *testing.T) {
+	cfg := vault.LocalConfig{VaultPath: "/vault", Projects: map[string]vault.LocalProject{"api": {Path: "/api", ActiveProfile: "dev"}}}
+	m := model{
+		cfg:             &cfg,
+		screen:          screenProfiles,
+		selectedProject: "api",
+		current:         app.CurrentProject{LinkedName: "api"},
+		syncStatus:      gitops.SyncStatus{State: gitops.SyncSynced},
+	}
+	next, cmd := m.profilesKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	got := next.(model)
+	if cmd == nil {
+		t.Fatal("reload should dispatch a refresh command")
+	}
+	if got.syncStatus.State != gitops.SyncChecking {
+		t.Fatalf("reload should re-enter checking state: %v", got.syncStatus.State)
+	}
+	if got.screen != screenProfiles {
+		t.Fatalf("reload should stay on the profiles screen: %v", got.screen)
 	}
 }

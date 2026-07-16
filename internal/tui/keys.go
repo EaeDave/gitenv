@@ -471,6 +471,9 @@ func (m model) profilesKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.requestProfileRemoval()
 	case "s":
 		return m.requestContextualSync()
+	case "r":
+		m.syncStatus.State = gitops.SyncChecking
+		return m, tea.Batch(loadCmd(m.cfg, m.cwd), inspectSyncCmd(m.cfg))
 	}
 	return m, nil
 }
