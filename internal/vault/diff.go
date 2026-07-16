@@ -95,7 +95,7 @@ func CompareVaultSnapshots(baseFiles, currentFiles map[string][]byte) (VaultDelt
 // CompareVaultSnapshotLines decrypts changed profiles in memory for an
 // explicitly requested plaintext view. Callers must discard the result when
 // the view is hidden or closed.
-func CompareVaultSnapshotLines(baseFiles, currentFiles map[string][]byte) ([]ProfileLineDelta, error) {
+func CompareVaultSnapshotLines(baseFiles, currentFiles map[string][]byte, scope string) ([]ProfileLineDelta, error) {
 	baseManifest, err := manifestFromSnapshot(baseFiles)
 	if err != nil {
 		return nil, fmt.Errorf("read base vault snapshot: %w", err)
@@ -107,6 +107,9 @@ func CompareVaultSnapshotLines(baseFiles, currentFiles map[string][]byte) ([]Pro
 	identity, identityErr := LoadIdentity()
 	deltas := make([]ProfileLineDelta, 0)
 	for _, ref := range profileUnion(baseManifest, currentManifest) {
+		if scope != "" && ref.project != scope {
+			continue
+		}
 		baseProfile, inBase := profileAt(baseManifest, ref)
 		currentProfile, inCurrent := profileAt(currentManifest, ref)
 		if inBase && inCurrent && baseProfile.Checksum == currentProfile.Checksum {

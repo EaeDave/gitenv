@@ -9,14 +9,36 @@ import (
 	gitops "github.com/eaedave/gitenv/internal/git"
 )
 
+// syncDiffScope returns the project the diff viewer is limited to, or "" when
+// browsing every project. The viewer is scoped whenever opened while focused.
+func (m model) syncDiffScope() string {
+	if m.isFocusedProject() {
+		return m.selectedProject
+	}
+	return ""
+}
+
+// syncDiffReturnScreen is the screen the viewer returns to on esc or after an
+// action: the profiles screen when opened from a project, else the list.
+func (m model) syncDiffReturnScreen() screen {
+	if m.syncDiffReturn == screenProfiles {
+		return screenProfiles
+	}
+	return screenProjects
+}
+
 type syncDiffTarget struct {
 	project string
 	profile string
 }
 
 func (m model) syncDiffTargets() []syncDiffTarget {
+	scope := m.syncDiffScope()
 	targets := make([]syncDiffTarget, 0, len(m.syncInventory.LocalEnvs))
 	for _, local := range m.syncInventory.LocalEnvs {
+		if scope != "" && local.Project != scope {
+			continue
+		}
 		targets = append(targets, syncDiffTarget{project: local.Project, profile: local.Profile})
 	}
 	return targets
@@ -84,7 +106,7 @@ func (m model) confirmDiffActionKey(key tea.KeyMsg, publish bool) (tea.Model, te
 	m.pendingDiffProject, m.pendingDiffProfile = "", ""
 	m.syncLineDiff = nil
 	m.syncDiffOffset = 0
-	m.screen = screenProjects
+	m.screen = m.syncDiffReturnScreen()
 	m.busy = true
 	if publish {
 		return m, opCmd(func() error { return app.PublishLocalEnv(m.cfg, project, profile) }, fmt.Sprintf("%s/%s captured and published", project, profile))

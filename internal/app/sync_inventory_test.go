@@ -125,7 +125,7 @@ func TestInspectSyncWithInventoryShowsIncomingRemoteChanges(t *testing.T) {
 		t.Fatalf("unexpected local worktree changes: %#v", inventory.Uncommitted)
 	}
 	assertInventoryContainsNoSecrets(t, inventory, "old-secret", "new-secret", "remote-value")
-	revealed, err := RevealSyncLineDiff(cfg, status)
+	revealed, err := RevealSyncLineDiff(cfg, status, "")
 	if err != nil {
 		t.Fatal(err)
 	}

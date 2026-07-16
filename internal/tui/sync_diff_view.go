@@ -75,7 +75,7 @@ func (m model) syncDiffLines() []string {
 		}
 		detailLines = append(detailLines, styles.warning.Render(detail))
 	} else {
-		for _, section := range m.syncInventorySections() {
+		for _, section := range m.syncInventorySections(m.syncDiffScope()) {
 			if len(detailLines) > 0 {
 				detailLines = append(detailLines, "")
 			}
@@ -90,11 +90,17 @@ func (m model) syncDiffLines() []string {
 }
 
 func (m model) localEnvDiffLines() []string {
+	scope := m.syncDiffScope()
 	if len(m.syncInventory.LocalEnvs) == 0 {
 		return nil
 	}
 	lines := []string{styles.label.Render("Local .env changes")}
+	shown := 0
 	for _, local := range m.syncInventory.LocalEnvs {
+		if scope != "" && local.Project != scope {
+			continue
+		}
+		shown++
 		lines = append(lines, m.renderSyncDiffTarget(local.Project, local.Profile))
 		for _, change := range local.Diff.Changes {
 			lines = append(lines, "  "+renderCaptureChange(change))
@@ -105,6 +111,9 @@ func (m model) localEnvDiffLines() []string {
 		if local.Diff.UnknownChanges > 0 {
 			lines = append(lines, styles.warning.Render(fmt.Sprintf("  ! %d unrecognized line change(s)", local.Diff.UnknownChanges)))
 		}
+	}
+	if shown == 0 {
+		return nil
 	}
 	return lines
 }

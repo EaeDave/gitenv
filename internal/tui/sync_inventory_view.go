@@ -20,7 +20,7 @@ func (m model) renderSyncInventory() string {
 		}
 		return styles.muted.Render(m.syncInventory.Detail)
 	}
-	sections := m.syncInventorySections()
+	sections := m.syncInventorySections("")
 	if len(sections) == 0 {
 		return ""
 	}
@@ -31,23 +31,41 @@ func (m model) renderSyncInventory() string {
 	return strings.Join(rendered, "\n\n") + "\n" + styles.muted.Render("Values hidden")
 }
 
-func (m model) syncInventorySections() [][]string {
+func (m model) syncInventorySections(scope string) [][]string {
 	sections := make([][]string, 0, 2)
-	if !m.syncInventory.Committed.Empty() {
+	committed := scopeVaultDelta(m.syncInventory.Committed, scope)
+	if !committed.Empty() {
 		title := "Committed, not published"
 		if m.syncStatus.State == gitops.SyncRemoteAhead {
 			title = "Incoming from remote"
 		}
-		sections = append(sections, renderInventorySectionLines(title, m.syncInventory.Committed))
-	} else if m.syncStatus.State == gitops.SyncLocalAhead && m.syncStatus.Ahead > 0 {
+		sections = append(sections, renderInventorySectionLines(title, committed))
+	} else if scope == "" && m.syncStatus.State == gitops.SyncLocalAhead && m.syncStatus.Ahead > 0 {
 		sections = append(sections, renderCommitOnlySummaryLines("Committed, not published", "↑", m.syncStatus.Ahead))
-	} else if m.syncStatus.State == gitops.SyncRemoteAhead && m.syncStatus.Behind > 0 {
+	} else if scope == "" && m.syncStatus.State == gitops.SyncRemoteAhead && m.syncStatus.Behind > 0 {
 		sections = append(sections, renderCommitOnlySummaryLines("Incoming from remote", "↓", m.syncStatus.Behind))
 	}
-	if !m.syncInventory.Uncommitted.Empty() {
-		sections = append(sections, renderInventorySectionLines("Uncommitted vault changes", m.syncInventory.Uncommitted))
+	uncommitted := scopeVaultDelta(m.syncInventory.Uncommitted, scope)
+	if !uncommitted.Empty() {
+		sections = append(sections, renderInventorySectionLines("Uncommitted vault changes", uncommitted))
 	}
 	return sections
+}
+
+// scopeVaultDelta keeps only one project's profile deltas when scoped; vault
+// metadata and other-file changes are not project-attributable, so a scoped
+// view drops them.
+func scopeVaultDelta(delta vault.VaultDelta, scope string) vault.VaultDelta {
+	if scope == "" {
+		return delta
+	}
+	scoped := vault.VaultDelta{}
+	for _, profile := range delta.Profiles {
+		if profile.Project == scope {
+			scoped.Profiles = append(scoped.Profiles, profile)
+		}
+	}
+	return scoped
 }
 
 func renderCommitOnlySummaryLines(title, direction string, count int) []string {

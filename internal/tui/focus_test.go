@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/eaedave/gitenv/internal/app"
+	"github.com/eaedave/gitenv/internal/envdiff"
 	gitops "github.com/eaedave/gitenv/internal/git"
 	"github.com/eaedave/gitenv/internal/vault"
 )
@@ -158,5 +160,63 @@ func TestProfilesReloadRechecksStatus(t *testing.T) {
 	}
 	if got.screen != screenProfiles {
 		t.Fatalf("reload should stay on the profiles screen: %v", got.screen)
+	}
+}
+
+func syncViewerModel(focused bool) model {
+	cfg := vault.LocalConfig{Projects: map[string]vault.LocalProject{
+		"api":    {Path: "/api", ActiveProfile: "dev"},
+		"worker": {Path: "/worker", ActiveProfile: "prod"},
+	}}
+	m := model{
+		cfg:             &cfg,
+		screen:          screenSyncDiff,
+		width:           100,
+		height:          24,
+		selectedProject: "api",
+		syncStatus:      gitops.SyncStatus{State: gitops.SyncSynced},
+		syncInventory: app.SyncInventory{Available: true, LocalEnvs: []app.LocalEnvDelta{
+			{Project: "api", Profile: "dev", Diff: envdiff.Diff{Changes: []envdiff.Change{{Key: "API_KEY", Kind: envdiff.Changed}}}},
+			{Project: "worker", Profile: "prod", Diff: envdiff.Diff{Changes: []envdiff.Change{{Key: "WORKER_KEY", Kind: envdiff.Changed}}}},
+		}},
+		syncDiffReturn: screenProfiles,
+	}
+	if focused {
+		m.current = app.CurrentProject{LinkedName: "api"}
+	} else {
+		m.browseProjects = true
+	}
+	return m
+}
+
+func TestSyncViewerScopesToCurrentProjectWhenFocused(t *testing.T) {
+	view := syncViewerModel(true).View()
+	if !strings.Contains(view, "API_KEY") || !strings.Contains(view, "api / dev") {
+		t.Fatalf("focused viewer should show the current project:\n%s", view)
+	}
+	if strings.Contains(view, "worker") || strings.Contains(view, "WORKER_KEY") {
+		t.Fatalf("focused viewer leaked another project:\n%s", view)
+	}
+}
+
+func TestSyncViewerShowsEveryProjectWhenBrowsing(t *testing.T) {
+	view := syncViewerModel(false).View()
+	if !strings.Contains(view, "API_KEY") || !strings.Contains(view, "WORKER_KEY") {
+		t.Fatalf("browsing viewer should show every project:\n%s", view)
+	}
+}
+
+func TestSyncViewerReturnsToItsOrigin(t *testing.T) {
+	fromProfiles := syncViewerModel(true)
+	next, _ := fromProfiles.syncDiffKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if got := next.(model); got.screen != screenProfiles {
+		t.Fatalf("viewer opened from profiles should return there: %v", got.screen)
+	}
+
+	fromProjects := syncViewerModel(false)
+	fromProjects.syncDiffReturn = screenProjects
+	next, _ = fromProjects.syncDiffKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if got := next.(model); got.screen != screenProjects {
+		t.Fatalf("viewer opened from the project list should return there: %v", got.screen)
 	}
 }

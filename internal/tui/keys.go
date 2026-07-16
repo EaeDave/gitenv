@@ -237,6 +237,7 @@ func (m model) projectsKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "v":
 		m.screen = screenSyncDiff
 		m.syncDiffOffset = 0
+		m.syncDiffReturn = screenProjects
 	case "g":
 		m.screen, m.menuCursor = screenRemote, 0
 	case "b":
@@ -256,7 +257,7 @@ func (m model) syncDiffKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.syncDiffOffset = clampSyncDiffOffset(m.syncDiffOffset, len(m.syncDiffLines()), pageSize)
 	switch key.String() {
 	case "esc", "q":
-		m.screen = screenProjects
+		m.screen = m.syncDiffReturnScreen()
 		m.syncDiffOffset = 0
 		m.syncLineDiff = nil
 		m.syncDiffLoading = false
@@ -272,7 +273,7 @@ func (m model) syncDiffKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.busy = true
 		m.syncDiffLoading = true
 		m.errText = ""
-		return m, revealSyncDiffCmd(m.cfg, m.syncStatus)
+		return m, revealSyncDiffCmd(m.cfg, m.syncStatus, m.syncDiffScope())
 	case "tab":
 		m = m.selectNextSyncDiff(1)
 	case "shift+tab":
@@ -471,6 +472,10 @@ func (m model) profilesKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.requestProfileRemoval()
 	case "s":
 		return m.requestContextualSync()
+	case "v":
+		m.screen = screenSyncDiff
+		m.syncDiffOffset = 0
+		m.syncDiffReturn = screenProfiles
 	case "r":
 		m.syncStatus.State = gitops.SyncChecking
 		return m, tea.Batch(loadCmd(m.cfg, m.cwd), inspectSyncCmd(m.cfg))

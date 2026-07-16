@@ -31,7 +31,7 @@ func TestRevealSyncLineDiffReturnsLiteralLocalLinesOnlyOnExplicitCall(t *testing
 		t.Fatal(err)
 	}
 
-	diff, err := RevealSyncLineDiff(cfg, gitops.SyncStatus{State: gitops.SyncNoRemote})
+	diff, err := RevealSyncLineDiff(cfg, gitops.SyncStatus{State: gitops.SyncNoRemote}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,6 +42,45 @@ func TestRevealSyncLineDiffReturnsLiteralLocalLinesOnlyOnExplicitCall(t *testing
 	assertLiteralLine(t, lines, envdiff.LineRemoved, "API_KEY=old-secret")
 	assertLiteralLine(t, lines, envdiff.LineAdded, "API_KEY=new-secret")
 	assertLiteralLine(t, lines, envdiff.LineContext, "DEBUG=false")
+}
+
+func TestRevealSyncLineDiffScopesToRequestedProject(t *testing.T) {
+	cfg, root := newVaultForRemote(t)
+	for _, project := range []string{"api", "worker"} {
+		dir := filepath.Join(root, project)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("KEY=old\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := vault.Link(&cfg, project, dir); err != nil {
+			t.Fatal(err)
+		}
+		if err := vault.Capture(&cfg, project, "dev"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("KEY=changed-"+project+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	scoped, err := RevealSyncLineDiff(cfg, gitops.SyncStatus{State: gitops.SyncNoRemote}, "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scoped.LocalEnvs) != 1 || scoped.LocalEnvs[0].Project != "api" {
+		t.Fatalf("scoped reveal should only include api: %#v", scoped.LocalEnvs)
+	}
+	assertLiteralLine(t, scoped.LocalEnvs[0].Lines, envdiff.LineAdded, "KEY=changed-api")
+
+	all, err := RevealSyncLineDiff(cfg, gitops.SyncStatus{State: gitops.SyncNoRemote}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all.LocalEnvs) != 2 {
+		t.Fatalf("unscoped reveal should include every project: %#v", all.LocalEnvs)
+	}
 }
 
 func assertLiteralLine(t *testing.T, lines []envdiff.LineChange, kind envdiff.LineKind, text string) {

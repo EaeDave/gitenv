@@ -125,6 +125,7 @@ type model struct {
 	syncDiffLoading                                        bool
 	width, height                                          int
 	syncDiffSelection                                      int
+	syncDiffReturn                                         screen
 	pendingDiffProject, pendingDiffProfile                 string
 	spinner                                                spinner.Model
 	editor                                                 textarea.Model
@@ -235,9 +236,9 @@ func inspectSyncCmd(cfg *vault.LocalConfig) tea.Cmd {
 	}
 }
 
-func revealSyncDiffCmd(cfg *vault.LocalConfig, status gitops.SyncStatus) tea.Cmd {
+func revealSyncDiffCmd(cfg *vault.LocalConfig, status gitops.SyncStatus, scope string) tea.Cmd {
 	return func() tea.Msg {
-		diff, err := app.RevealSyncLineDiff(*cfg, status)
+		diff, err := app.RevealSyncLineDiff(*cfg, status, scope)
 		return syncLineDiffMsg{diff: diff, err: err}
 	}
 }

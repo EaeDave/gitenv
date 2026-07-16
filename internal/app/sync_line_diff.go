@@ -23,8 +23,8 @@ type SyncLineDiff struct {
 	Uncommitted []vault.ProfileLineDelta
 }
 
-func RevealSyncLineDiff(cfg vault.LocalConfig, status gitops.SyncStatus) (SyncLineDiff, error) {
-	localEnvs, err := revealLocalEnvLines(cfg)
+func RevealSyncLineDiff(cfg vault.LocalConfig, status gitops.SyncStatus, scope string) (SyncLineDiff, error) {
+	localEnvs, err := revealLocalEnvLines(cfg, scope)
 	if err != nil {
 		return SyncLineDiff{}, err
 	}
@@ -39,7 +39,7 @@ func RevealSyncLineDiff(cfg vault.LocalConfig, status gitops.SyncStatus) (SyncLi
 	if err != nil {
 		return SyncLineDiff{}, fmt.Errorf("read worktree for plaintext diff: %w", err)
 	}
-	uncommitted, err := vault.CompareVaultSnapshotLines(headFiles, worktreeFiles)
+	uncommitted, err := vault.CompareVaultSnapshotLines(headFiles, worktreeFiles, scope)
 	if err != nil {
 		return SyncLineDiff{}, fmt.Errorf("compare uncommitted plaintext: %w", err)
 	}
@@ -50,7 +50,7 @@ func RevealSyncLineDiff(cfg vault.LocalConfig, status gitops.SyncStatus) (SyncLi
 	upstream, err := gitops.UpstreamRevision(cfg.VaultPath)
 	if err != nil {
 		if status.State == gitops.SyncLocalAhead {
-			result.Committed, err = vault.CompareVaultSnapshotLines(map[string][]byte{}, headFiles)
+			result.Committed, err = vault.CompareVaultSnapshotLines(map[string][]byte{}, headFiles, scope)
 			return result, err
 		}
 		return SyncLineDiff{}, err
@@ -60,9 +60,9 @@ func RevealSyncLineDiff(cfg vault.LocalConfig, status gitops.SyncStatus) (SyncLi
 		return SyncLineDiff{}, fmt.Errorf("read upstream for plaintext diff: %w", err)
 	}
 	if status.State == gitops.SyncRemoteAhead {
-		result.Committed, err = vault.CompareVaultSnapshotLines(headFiles, upstreamFiles)
+		result.Committed, err = vault.CompareVaultSnapshotLines(headFiles, upstreamFiles, scope)
 	} else {
-		result.Committed, err = vault.CompareVaultSnapshotLines(upstreamFiles, headFiles)
+		result.Committed, err = vault.CompareVaultSnapshotLines(upstreamFiles, headFiles, scope)
 	}
 	if err != nil {
 		return SyncLineDiff{}, fmt.Errorf("compare committed plaintext: %w", err)
@@ -70,7 +70,7 @@ func RevealSyncLineDiff(cfg vault.LocalConfig, status gitops.SyncStatus) (SyncLi
 	return result, nil
 }
 
-func revealLocalEnvLines(cfg vault.LocalConfig) ([]LocalEnvLineDelta, error) {
+func revealLocalEnvLines(cfg vault.LocalConfig, scope string) ([]LocalEnvLineDelta, error) {
 	projects := make([]string, 0, len(cfg.Projects))
 	for project := range cfg.Projects {
 		projects = append(projects, project)
@@ -79,6 +79,9 @@ func revealLocalEnvLines(cfg vault.LocalConfig) ([]LocalEnvLineDelta, error) {
 	deltas := make([]LocalEnvLineDelta, 0)
 	for _, project := range projects {
 		local := cfg.Projects[project]
+		if scope != "" && project != scope {
+			continue
+		}
 		if local.ActiveProfile == "" {
 			continue
 		}
