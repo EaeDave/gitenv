@@ -234,7 +234,10 @@ func (m model) renderProfiles(width int) string {
 		profiles = lipgloss.JoinVertical(lipgloss.Left, renderPanel(m.selectedProject, details, width, false), "", renderPanel("Profiles", profiles, width, true))
 	}
 	syncPanel := renderPanel("Sync", m.renderSyncStatus(), width, false)
-	help := renderHelp("enter", "apply", "e", "edit", "s", "sync", "c", "capture", "n", "new", "d", "remove", "esc", "back")
+	help := renderHelp("enter", "apply", "e", "edit", "s", "sync", "c", "capture", "n", "new", "d", "remove", "p", "projects", "esc", "back")
+	if m.isFocusedProject() {
+		help = renderHelp("enter", "apply", "e", "edit", "s", "sync", "c", "capture", "n", "new", "d", "remove", "p", "browse projects", "q", "quit")
+	}
 	return lipgloss.JoinVertical(lipgloss.Left, profiles, "", syncPanel, "", help)
 }
 

@@ -117,6 +117,7 @@ type model struct {
 	remoteDisplayURL                                       string // redacted display URL
 	accessRequired                                         bool
 	migrationRecoveryRequired                              bool
+	browseProjects, landed                                 bool
 	syncStatus                                             gitops.SyncStatus
 	syncInventory                                          app.SyncInventory
 	syncDiffOffset                                         int
@@ -143,9 +144,13 @@ func newModel(cfg *vault.LocalConfig, cwd string) model {
 	if err == nil {
 		m.current = current
 	}
-	if cfg.VaultPath == "" {
+	switch {
+	case cfg.VaultPath == "":
 		m.screen = screenOnboarding
-	} else {
+	case m.current.LinkedName != "":
+		m.screen = screenProfiles
+		m.selectedProject = m.current.LinkedName
+	default:
 		m.screen = screenProjects
 	}
 	return m
@@ -332,6 +337,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.accessRequired = false
 		m.migrationRecoveryRequired = false
+		if !m.landed {
+			m.landed = true
+			if !m.browseProjects && m.current.LinkedName != "" {
+				m.selectedProject = m.current.LinkedName
+				m.profiles = sortedKeys(m.manifest.Projects[m.selectedProject].Profiles)
+				m.profileCursor = 0
+				m.screen = screenProfiles
+			}
+		}
 		return m, nil
 
 	case operationMsg:

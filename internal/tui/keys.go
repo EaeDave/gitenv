@@ -437,9 +437,21 @@ func (m model) selectUnlockMenuItem() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// isFocusedProject reports whether the TUI launched inside a linked project and
+// the user has not unlocked browsing across all projects yet.
+func (m model) isFocusedProject() bool {
+	return m.current.LinkedName != "" && !m.browseProjects
+}
+
 func (m model) profilesKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "q", "esc":
+		if m.isFocusedProject() {
+			return m, tea.Quit
+		}
+		m.screen, m.selectedProject = screenProjects, ""
+	case "p":
+		m.browseProjects = true
 		m.screen, m.selectedProject = screenProjects, ""
 	case "up", "k":
 		m.profileCursor = max(0, m.profileCursor-1)
