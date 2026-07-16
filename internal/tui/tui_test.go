@@ -446,3 +446,68 @@ func TestPasswordFieldsRenderMasked(t *testing.T) {
 		t.Fatalf("password was not masked: %q", view)
 	}
 }
+
+func TestWindowSizeUpdatesResponsiveDimensions(t *testing.T) {
+	cfg := vault.LocalConfig{}
+	m := model{cfg: &cfg}
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 108, Height: 32})
+	got := next.(model)
+	if got.width != 108 || got.height != 32 {
+		t.Fatalf("window size not retained: width=%d height=%d", got.width, got.height)
+	}
+}
+
+func TestProjectViewAdaptsBetweenWideAndCompactLayouts(t *testing.T) {
+	cfg := vault.LocalConfig{
+		VaultPath: "/vault",
+		Projects: map[string]vault.LocalProject{
+			"api": {Path: "/workspace/api", ActiveProfile: "dev"},
+		},
+	}
+	m := model{
+		cfg:      &cfg,
+		screen:   screenProjects,
+		projects: []string{"api"},
+		statuses: map[string]string{"api": "clean"},
+		current:  app.CurrentProject{Path: "/workspace/api", HasEnv: true, LinkedName: "api"},
+	}
+
+	m.width = 108
+	wide := m.View()
+	m.width = 60
+	compact := m.View()
+	wideProjectsLine := lineContaining(t, wide, "Projects")
+	wideWorkspaceLine := lineContaining(t, wide, "Workspace")
+	compactProjectsLine := lineContaining(t, compact, "Projects")
+	compactWorkspaceLine := lineContaining(t, compact, "Workspace")
+	if wideProjectsLine != wideWorkspaceLine {
+		t.Fatalf("wide layout did not place panels side by side:\n%s", wide)
+	}
+	if compactProjectsLine == compactWorkspaceLine {
+		t.Fatalf("compact layout did not stack panels:\n%s", compact)
+	}
+	for _, text := range []string{"api", "dev", "clean", ".env found", "linked: api"} {
+		if !strings.Contains(wide, text) || !strings.Contains(compact, text) {
+			t.Fatalf("responsive view lost %q", text)
+		}
+	}
+}
+
+func TestStatusRenderingIncludesTextWithoutColor(t *testing.T) {
+	for _, status := range []string{"clean", "modified", "error", "unknown"} {
+		if rendered := renderStatus(status); !strings.Contains(rendered, status) {
+			t.Fatalf("status %q relies on color alone: %q", status, rendered)
+		}
+	}
+}
+
+func lineContaining(t *testing.T, text, fragment string) int {
+	t.Helper()
+	for index, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, fragment) {
+			return index
+		}
+	}
+	t.Fatalf("view does not contain %q:\n%s", fragment, text)
+	return -1
+}

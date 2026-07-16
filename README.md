@@ -54,7 +54,7 @@ No primeiro uso, a TUI guia o processo completo:
 
 Se não houver mais nenhuma credencial, escolha **Disconnect this vault and start again**. O vínculo/configuração local será limpo, mas o diretório do vault e o remoto Git não serão apagados.
 
-Depois, a tela principal permite aplicar/capturar/criar/remover perfis, executar pull/push, administrar o remoto do vault e exportar recovery.
+Depois, a tela principal responsiva permite aplicar/capturar/criar/remover perfis, executar pull/push, administrar o remoto do vault e exportar recovery. Em terminais largos, projetos e detalhes aparecem lado a lado; em terminais estreitos, os painéis são empilhados sem depender apenas de cores para comunicar estado.
 
 Atalhos principais:
 

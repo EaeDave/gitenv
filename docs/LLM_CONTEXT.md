@@ -9,7 +9,7 @@
 - Protected access, migration and identity selection → `internal/vault/access.go`, `internal/vault/crypto.go`, `internal/app/roadmap_test.go`.
 - Device enrollment and recovery → `internal/vault/enrollment.go`, `internal/app/device.go`, `internal/vault/enrollment_test.go`.
 - Vault remote management and repository identity → `internal/app/remote.go`, `internal/git/normalize.go`, focused tests beside them.
-- TUI access gates and user workflows → `internal/tui/tui.go`, `internal/tui/tui_test.go`.
+- TUI access gates and user workflows → `internal/tui/tui.go`; responsive rendering and visual contracts → `internal/tui/view.go`, `internal/tui/theme.go`, `internal/tui/tui_test.go`.
 
 ## Non-inferable technical facts
 
