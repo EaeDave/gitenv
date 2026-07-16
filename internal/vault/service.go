@@ -231,3 +231,47 @@ func Status(cfg LocalConfig, project string) (string, error) {
 	}
 	return "modified", nil
 }
+
+// ProfileStatuses reports how the live local .env relates to each stored
+// profile of a project. Only the active profile can be "modified" (uncaptured
+// local changes); inactive profiles are intact stored snapshots and are marked
+// "current" only when the on-disk .env happens to match their bytes.
+func ProfileStatuses(cfg LocalConfig, project string) (map[string]string, error) {
+	local, ok := cfg.Projects[project]
+	if !ok {
+		return nil, nil
+	}
+	manifest, err := LoadManifest(cfg.VaultPath)
+	if err != nil {
+		return nil, err
+	}
+	entry, ok := manifest.Projects[project]
+	if !ok {
+		return nil, nil
+	}
+	data, readErr := os.ReadFile(filepath.Join(local.Path, ".env"))
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		return nil, readErr
+	}
+	hasEnv := readErr == nil
+	localSum := ""
+	if hasEnv {
+		localSum = Checksum(data)
+	}
+	statuses := make(map[string]string, len(entry.Profiles))
+	for name, profile := range entry.Profiles {
+		switch {
+		case name == local.ActiveProfile && !hasEnv:
+			statuses[name] = "missing"
+		case name == local.ActiveProfile && profile.Checksum == localSum:
+			statuses[name] = "clean"
+		case name == local.ActiveProfile:
+			statuses[name] = "modified"
+		case hasEnv && profile.Checksum == localSum:
+			statuses[name] = "current"
+		default:
+			statuses[name] = ""
+		}
+	}
+	return statuses, nil
+}

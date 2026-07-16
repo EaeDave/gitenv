@@ -2,16 +2,28 @@ package app
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 
+	"github.com/eaedave/gitenv/internal/envdiff"
 	gitops "github.com/eaedave/gitenv/internal/git"
 	"github.com/eaedave/gitenv/internal/vault"
 )
 
+type LocalEnvDelta struct {
+	Project string
+	Profile string
+	Diff    envdiff.Diff
+}
+
 type SyncInventory struct {
 	Committed   vault.VaultDelta
 	Uncommitted vault.VaultDelta
+	LocalEnvs   []LocalEnvDelta
 	Available   bool
 	Detail      string
+	LocalDetail string
 }
 
 func InspectSyncWithInventory(cfg vault.LocalConfig) (gitops.SyncStatus, SyncInventory) {
@@ -19,9 +31,14 @@ func InspectSyncWithInventory(cfg vault.LocalConfig) (gitops.SyncStatus, SyncInv
 	inventory, err := inspectSyncInventory(cfg.VaultPath, status)
 	if err != nil {
 		inventory.Detail = safeInventoryError(err)
-		return status, inventory
+	} else {
+		inventory.Available = true
 	}
-	inventory.Available = true
+	localEnvs, localErr := inspectLocalEnvChanges(cfg)
+	inventory.LocalEnvs = localEnvs
+	if localErr != nil {
+		inventory.LocalDetail = "some local .env change details unavailable"
+	}
 	return status, inventory
 }
 
@@ -67,6 +84,44 @@ func inspectSyncInventory(root string, status gitops.SyncStatus) (SyncInventory,
 		return SyncInventory{}, fmt.Errorf("compare committed vault changes: %w", err)
 	}
 	return inventory, nil
+}
+
+func inspectLocalEnvChanges(cfg vault.LocalConfig) ([]LocalEnvDelta, error) {
+	projects := make([]string, 0, len(cfg.Projects))
+	for project := range cfg.Projects {
+		projects = append(projects, project)
+	}
+	sort.Strings(projects)
+	deltas := make([]LocalEnvDelta, 0)
+	var firstErr error
+	for _, project := range projects {
+		local := cfg.Projects[project]
+		if local.ActiveProfile == "" {
+			continue
+		}
+		current, err := os.ReadFile(filepath.Join(local.Path, ".env"))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			if firstErr == nil {
+				firstErr = fmt.Errorf("read local environment for %q: %w", project, err)
+			}
+			continue
+		}
+		base, err := vault.ReadProfile(&cfg, project, local.ActiveProfile)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("read active profile for %q: %w", project, err)
+			}
+			continue
+		}
+		diff := envdiff.Compare(base, current)
+		if !diff.Empty() {
+			deltas = append(deltas, LocalEnvDelta{Project: project, Profile: local.ActiveProfile, Diff: diff})
+		}
+	}
+	return deltas, firstErr
 }
 
 func safeInventoryError(err error) string {

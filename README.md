@@ -17,8 +17,11 @@
 - `capture` criptografa o `.env` atual preservando comentários, linhas desativadas, ordem e quebras de linha byte a byte. Antes de qualquer captura, a TUI mostra um preview estrutural com nomes e tipos de mudança, nunca valores, e só grava após confirmação explícita; a CLI permanece direta para automação. `switch` aplica um perfil ao projeto vinculado.
 - Um `.env` modificado depois da última captura nunca é sobrescrito silenciosamente: a CLI exige `--force`; a TUI exige confirmação explícita.
 - Um perfil ativo não pode ser removido; aplique outro primeiro. Remover perfil inativo exige confirmação e elimina apenas ciphertext e metadados do vault.
+- Na tela de perfis, apenas o perfil ativo pode aparecer como `modified` (em amarelo), porque o único `.env` local corresponde a ele; os demais perfis são snapshots íntegros no vault e, quando o `.env` local coincide byte a byte com um deles, esse perfil é sinalizado como `matches .env`. O status do projeto também é destacado em amarelo quando há mudança não capturada.
 - A TUI distingue o estado do `.env` em relação ao perfil ativo do estado do vault local em relação ao remoto. A verificação remota faz apenas `fetch`, expira após oito segundos e informa sincronizado, mudanças locais, mudanças remotas, divergência, falta de remoto, indisponibilidade ou falha de autenticação.
-- O painel de sincronização mostra automaticamente um resumo semântico antes de qualquer ação: separa mudanças já commitadas, ainda não commitadas e recebidas do remoto; exibe somente projeto, perfil, nomes de variáveis e tipos de mudança, nunca valores. Uma recaptura criptográfica do mesmo conteúdo é identificada como conteúdo inalterado.
+- O painel de sincronização mostra automaticamente um resumo semântico do vault antes de qualquer ação. O atalho `v` abre o visualizador completo e rolável, incluindo diferenças entre cada `.env` local e seu perfil ativo, mudanças do vault já commitadas, ainda não commitadas e recebidas do remoto. Por padrão, as visualizações exibem somente projeto, perfil, nomes de variáveis e tipos de mudança. Dentro do visualizador, `x` revela sob demanda um diff literal com linhas `-` antigas e `+` novas, incluindo valores; `x` novamente oculta, e sair da tela descarta o plaintext carregado da memória do modelo.
+- Dentro do visualizador é possível agir sobre um único ambiente: `Tab`/`Shift+Tab` selecionam o projeto/perfil, `p` captura e publica somente aquele `.env` e `d` restaura somente aquele `.env` pelo perfil ativo. Publicar um único ambiente exige que o vault esteja sincronizado e limpo, e tanto publicar quanto descartar exigem confirmação explícita.
+- O atalho `e`, na tela de perfis ou no visualizador, abre um editor de texto embutido na própria TUI para o `.env` local do projeto, sem depender de editores externos. Enquanto se digita, um resumo mostra em tempo real quais variáveis foram adicionadas, removidas ou alteradas, sempre sem exibir valores. Salvar (`ctrl+s`) grava o arquivo preservando byte a byte o que não foi tocado; sair com alterações não salvas exige confirmação. O editor embutido recusa `.env` com tabulações, caracteres de controle ou bytes não-UTF-8 em vez de corrompê-los silenciosamente.
 - O atalho `s` propõe a ação adequada e exige confirmação antes de baixar ou publicar. Divergências e estados indisponíveis são bloqueados com orientação; sincronizar nunca aplica um perfil nem modifica arquivos `.env` locais. Os atalhos `p` e `u` permanecem disponíveis como operações avançadas explícitas.
 - Git armazena somente ciphertext, metadados e material público/embrulhado. Recovery identity e senha mestra exigem guarda separada; perder ambas as formas de acesso torna os perfis irrecuperáveis.
 <!-- business-readme:business-rules:end -->
@@ -66,6 +69,7 @@ a      adicionar projeto atual
 c      capturar perfil ativo
 n      criar perfil (dentro do projeto)
 d      remover perfil inativo (dentro do projeto)
+v      abrir visualizador completo das mudanças locais e do vault
 s      sincronizar conforme o estado remoto detectado
 p      pull explícito do vault (avançado)
 u      push explícito do vault (avançado)
@@ -74,6 +78,8 @@ b      exportar recovery identity
 r      recarregar
 q      voltar ou sair
 ```
+
+No visualizador, use `Tab`/`Shift+Tab` para selecionar o ambiente, `e` para editar o `.env` selecionado, `p` para publicar e `d` para descartar o ambiente selecionado, `x` para revelar/ocultar valores, `↑`/`↓` ou `j`/`k` para rolar, `PgUp`/`PgDn` para navegar por página, `Home`/`End` para ir ao início/fim e `Esc`/`q` para voltar. No editor, `ctrl+s` salva, `esc` cancela e `enter` cria nova linha.
 
 O comando `gitenv pull` atualiza somente o vault; arquivos `.env` locais continuam sendo aplicados explicitamente pela tela de perfis. A CLI permanece disponível para automação e recuperação.
 

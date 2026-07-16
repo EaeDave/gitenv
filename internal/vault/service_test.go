@@ -189,3 +189,90 @@ func TestLoadIdentityForManifestSkipsStaleSources(t *testing.T) {
 		t.Fatalf("authorized fallback was not cached: identity=%v err=%v", cached, err)
 	}
 }
+
+func TestProfileStatusesMarksOnlyActiveProfileModified(t *testing.T) {
+	t.Setenv("GITENV_CONFIG_DIR", filepath.Join(t.TempDir(), "config"))
+	identity, err := GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveIdentity(identity); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	vaultDir := filepath.Join(root, "vault")
+	if err := Init(vaultDir, identity.Recipient().String()); err != nil {
+		t.Fatal(err)
+	}
+	projectDir := filepath.Join(root, "project")
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	devEnv := []byte("API_URL=https://dev\n")
+	prodEnv := []byte("API_URL=https://prod\n")
+	cfg := LocalConfig{VaultPath: vaultDir, Projects: map[string]LocalProject{}}
+	if err := Link(&cfg, "api", projectDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, ".env"), devEnv, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Capture(&cfg, "api", "dev"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, ".env"), prodEnv, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Capture(&cfg, "api", "prod"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Apply(&cfg, "api", "prod", true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Active profile clean: local .env matches prod snapshot.
+	statuses, err := ProfileStatuses(cfg, "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if statuses["prod"] != "clean" || statuses["dev"] != "" {
+		t.Fatalf("clean state = %#v", statuses)
+	}
+
+	// Uncaptured local edit: only the active profile turns modified.
+	if err := os.WriteFile(filepath.Join(projectDir, ".env"), []byte("API_URL=https://edited\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	statuses, err = ProfileStatuses(cfg, "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if statuses["prod"] != "modified" || statuses["dev"] != "" {
+		t.Fatalf("modified state = %#v", statuses)
+	}
+
+	// Local .env restored to the dev snapshot while prod is active: dev is
+	// flagged as the current on-disk match, prod as modified.
+	if err := os.WriteFile(filepath.Join(projectDir, ".env"), devEnv, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	statuses, err = ProfileStatuses(cfg, "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if statuses["dev"] != "current" || statuses["prod"] != "modified" {
+		t.Fatalf("current-match state = %#v", statuses)
+	}
+
+	// Missing .env: the active profile reports missing.
+	if err := os.Remove(filepath.Join(projectDir, ".env")); err != nil {
+		t.Fatal(err)
+	}
+	statuses, err = ProfileStatuses(cfg, "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if statuses["prod"] != "missing" || statuses["dev"] != "" {
+		t.Fatalf("missing state = %#v", statuses)
+	}
+}

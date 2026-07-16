@@ -20,32 +20,44 @@ func (m model) renderSyncInventory() string {
 		}
 		return styles.muted.Render(m.syncInventory.Detail)
 	}
-	sections := make([]string, 0, 2)
+	sections := m.syncInventorySections()
+	if len(sections) == 0 {
+		return ""
+	}
+	rendered := make([]string, 0, len(sections))
+	for _, section := range sections {
+		rendered = append(rendered, limitInventoryLines(section, syncInventoryLineLimit))
+	}
+	return strings.Join(rendered, "\n\n") + "\n" + styles.muted.Render("Values hidden")
+}
+
+func (m model) syncInventorySections() [][]string {
+	sections := make([][]string, 0, 2)
 	if !m.syncInventory.Committed.Empty() {
 		title := "Committed, not published"
 		if m.syncStatus.State == gitops.SyncRemoteAhead {
 			title = "Incoming from remote"
 		}
-		sections = append(sections, renderInventorySection(title, m.syncInventory.Committed))
+		sections = append(sections, renderInventorySectionLines(title, m.syncInventory.Committed))
 	} else if m.syncStatus.State == gitops.SyncLocalAhead && m.syncStatus.Ahead > 0 {
-		sections = append(sections, renderCommitOnlySummary("Committed, not published", "↑", m.syncStatus.Ahead))
+		sections = append(sections, renderCommitOnlySummaryLines("Committed, not published", "↑", m.syncStatus.Ahead))
 	} else if m.syncStatus.State == gitops.SyncRemoteAhead && m.syncStatus.Behind > 0 {
-		sections = append(sections, renderCommitOnlySummary("Incoming from remote", "↓", m.syncStatus.Behind))
+		sections = append(sections, renderCommitOnlySummaryLines("Incoming from remote", "↓", m.syncStatus.Behind))
 	}
 	if !m.syncInventory.Uncommitted.Empty() {
-		sections = append(sections, renderInventorySection("Uncommitted vault changes", m.syncInventory.Uncommitted))
+		sections = append(sections, renderInventorySectionLines("Uncommitted vault changes", m.syncInventory.Uncommitted))
 	}
-	if len(sections) == 0 {
-		return ""
-	}
-	return strings.Join(sections, "\n\n") + "\n" + styles.muted.Render("Values hidden")
+	return sections
 }
 
-func renderCommitOnlySummary(title, direction string, count int) string {
-	return styles.label.Render(title) + "\n" + styles.muted.Render(fmt.Sprintf("%s %d commit(s), no vault content changes", direction, count))
+func renderCommitOnlySummaryLines(title, direction string, count int) []string {
+	return []string{
+		styles.label.Render(title),
+		styles.muted.Render(fmt.Sprintf("%s %d commit(s), no vault content changes", direction, count)),
+	}
 }
 
-func renderInventorySection(title string, delta vault.VaultDelta) string {
+func renderInventorySectionLines(title string, delta vault.VaultDelta) []string {
 	lines := []string{styles.label.Render(title)}
 	for _, profile := range delta.Profiles {
 		lines = append(lines, renderProfileDelta(profile)...)
@@ -56,7 +68,7 @@ func renderInventorySection(title string, delta vault.VaultDelta) string {
 	if delta.OtherFilesChanged > 0 {
 		lines = append(lines, styles.warning.Render(fmt.Sprintf("~ %d other vault file(s)", delta.OtherFilesChanged)))
 	}
-	return limitInventoryLines(lines, syncInventoryLineLimit)
+	return lines
 }
 
 func renderProfileDelta(profile vault.ProfileDelta) []string {

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/eaedave/gitenv/internal/app"
@@ -41,6 +42,11 @@ const (
 	screenConfirmDelete
 	screenConfirmSync
 	screenConfirmCapture
+	screenSyncDiff
+	screenConfirmDiffPublish
+	screenConfirmDiffDiscard
+	screenEditor
+	screenConfirmEditorDiscard
 )
 
 type field struct {
@@ -53,10 +59,10 @@ type operationMsg struct {
 	info string
 	err  error
 }
-
 type reloadMsg struct {
 	manifest                 vault.Manifest
 	statuses                 map[string]string
+	profileStatuses          map[string]map[string]string
 	current                  app.CurrentProject
 	remoteURL                string // raw URL, only when safe to prefill (no credentials)
 	remoteDisplayURL         string // redacted URL for display
@@ -68,6 +74,10 @@ type reloadMsg struct {
 type syncStatusMsg struct {
 	status    gitops.SyncStatus
 	inventory app.SyncInventory
+}
+type syncLineDiffMsg struct {
+	diff app.SyncLineDiff
+	err  error
 }
 
 type captureIntent int
@@ -92,6 +102,7 @@ type model struct {
 	current                                               app.CurrentProject
 	manifest                                              vault.Manifest
 	statuses                                              map[string]string
+	profileStatuses                                       map[string]map[string]string
 	projects, profiles                                    []string
 	projectCursor, profileCursor, menuCursor, fieldCursor int
 	selectedProject, pendingProfile, pendingProject       string
@@ -108,8 +119,18 @@ type model struct {
 	migrationRecoveryRequired                             bool
 	syncStatus                                            gitops.SyncStatus
 	syncInventory                                         app.SyncInventory
+	syncDiffOffset                                        int
+	syncLineDiff                                          *app.SyncLineDiff
+	syncDiffLoading                                       bool
 	width, height                                         int
+	syncDiffSelection                                     int
+	pendingDiffProject, pendingDiffProfile                string
 	spinner                                               spinner.Model
+	editor                                                textarea.Model
+	editorProject                                         string
+	editorRaw                                             []byte
+	editorCRLF, editorTrailingNewline                     bool
+	editorReturn                                          screen
 }
 
 func newModel(cfg *vault.LocalConfig, cwd string) model {
@@ -172,12 +193,16 @@ func loadCmd(cfg *vault.LocalConfig, cwd string) tea.Cmd {
 			}
 		}
 		statuses := make(map[string]string, len(cfg.Projects))
+		profileStatuses := make(map[string]map[string]string, len(cfg.Projects))
 		for name := range cfg.Projects {
 			status, statusErr := vault.Status(*cfg, name)
 			if statusErr != nil {
 				statuses[name] = "error"
 			} else {
 				statuses[name] = status
+			}
+			if perProfile, profileErr := vault.ProfileStatuses(*cfg, name); profileErr == nil {
+				profileStatuses[name] = perProfile
 			}
 		}
 		rawURL, rawErr := app.VaultRemoteURL(*cfg)
@@ -189,6 +214,7 @@ func loadCmd(cfg *vault.LocalConfig, cwd string) tea.Cmd {
 		return reloadMsg{
 			manifest:         manifest,
 			statuses:         statuses,
+			profileStatuses:  profileStatuses,
 			current:          current,
 			remoteURL:        prefillURL,
 			remoteDisplayURL: displayURL,
@@ -200,6 +226,13 @@ func inspectSyncCmd(cfg *vault.LocalConfig) tea.Cmd {
 	return func() tea.Msg {
 		status, inventory := app.InspectSyncWithInventory(*cfg)
 		return syncStatusMsg{status: status, inventory: inventory}
+	}
+}
+
+func revealSyncDiffCmd(cfg *vault.LocalConfig, status gitops.SyncStatus) tea.Cmd {
+	return func() tea.Msg {
+		diff, err := app.RevealSyncLineDiff(*cfg, status)
+		return syncLineDiffMsg{diff: diff, err: err}
 	}
 }
 
@@ -217,6 +250,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m = m.applyEditorSize()
 		return m, nil
 
 	case spinner.TickMsg:
@@ -226,6 +260,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case syncStatusMsg:
 		m.syncStatus, m.syncInventory = msg.status, msg.inventory
+		return m, nil
+
+	case syncLineDiffMsg:
+		m.busy = false
+		m.syncDiffLoading = false
+		if msg.err != nil {
+			m.syncLineDiff = nil
+			m.errText = "could not reveal environment values"
+			return m, nil
+		}
+		m.syncLineDiff = &msg.diff
+		m.syncDiffOffset = 0
 		return m, nil
 
 	case capturePreviewMsg:
@@ -246,6 +292,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = false
 		m.manifest = msg.manifest
 		m.statuses = msg.statuses
+		m.profileStatuses = msg.profileStatuses
 		m.projects = sortedKeys(m.cfg.Projects)
 		m.current = msg.current
 		m.remoteURL = msg.remoteURL
@@ -317,6 +364,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.info = ""
 		m.errText = ""
 		return m.handleKey(msg)
+	}
+	if m.screen == screenEditor {
+		var cmd tea.Cmd
+		m.editor, cmd = m.editor.Update(msg)
+		return m, cmd
 	}
 	return m, nil
 }

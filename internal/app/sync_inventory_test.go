@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eaedave/gitenv/internal/envdiff"
 	gitops "github.com/eaedave/gitenv/internal/git"
 	"github.com/eaedave/gitenv/internal/vault"
 )
@@ -124,6 +125,67 @@ func TestInspectSyncWithInventoryShowsIncomingRemoteChanges(t *testing.T) {
 		t.Fatalf("unexpected local worktree changes: %#v", inventory.Uncommitted)
 	}
 	assertInventoryContainsNoSecrets(t, inventory, "old-secret", "new-secret", "remote-value")
+	revealed, err := RevealSyncLineDiff(cfg, status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(revealed.Committed) != 1 {
+		t.Fatalf("incoming literal deltas = %#v", revealed.Committed)
+	}
+	assertLiteralLine(t, revealed.Committed[0].Lines, envdiff.LineRemoved, "API_URL=old-secret")
+	assertLiteralLine(t, revealed.Committed[0].Lines, envdiff.LineAdded, "API_URL=new-secret")
+	assertLiteralLine(t, revealed.Committed[0].Lines, envdiff.LineAdded, "ADDED=remote-value")
+}
+
+func TestInspectSyncWithInventoryIncludesModifiedLocalEnvWhenAnotherEnvIsMissing(t *testing.T) {
+	cfg, root := newVaultForRemote(t)
+	for _, project := range []string{"api", "missing"} {
+		projectDir := filepath.Join(root, project)
+		if err := os.MkdirAll(projectDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(projectDir, ".env"), []byte("API_KEY=old-secret\n# DEBUG=true\nREMOVED=gone\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := vault.Link(&cfg, project, projectDir); err != nil {
+			t.Fatal(err)
+		}
+		if err := vault.Capture(&cfg, project, "dev"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Remove(filepath.Join(root, "missing", ".env")); err != nil {
+		t.Fatal(err)
+	}
+	current := []byte("API_KEY=new-secret\nDEBUG=true\nADDED=private-value\n")
+	if err := os.WriteFile(filepath.Join(root, "api", ".env"), current, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, inventory := InspectSyncWithInventory(cfg)
+	if inventory.LocalDetail != "" || len(inventory.LocalEnvs) != 1 {
+		t.Fatalf("local env inventory = %#v", inventory)
+	}
+	local := inventory.LocalEnvs[0]
+	if local.Project != "api" || local.Profile != "dev" || local.Diff.Empty() {
+		t.Fatalf("local env delta = %#v", local)
+	}
+	wantKinds := map[string]envdiff.Kind{
+		"API_KEY": envdiff.Changed,
+		"DEBUG":   envdiff.Enabled,
+		"ADDED":   envdiff.Added,
+		"REMOVED": envdiff.Removed,
+	}
+	for _, change := range local.Diff.Changes {
+		if wantKinds[change.Key] != change.Kind {
+			t.Fatalf("change %s = %s, want %s", change.Key, change.Kind, wantKinds[change.Key])
+		}
+		delete(wantKinds, change.Key)
+	}
+	if len(wantKinds) != 0 {
+		t.Fatalf("missing local changes: %#v", wantKinds)
+	}
+	assertInventoryContainsNoSecrets(t, inventory, "old-secret", "new-secret", "private-value")
 }
 
 func commitVault(t *testing.T, root, message string) {

@@ -39,6 +39,13 @@ func (d VaultDelta) Empty() bool {
 	return len(d.Profiles) == 0 && !d.MetadataChanged && d.OtherFilesChanged == 0
 }
 
+type ProfileLineDelta struct {
+	Project string
+	Profile string
+	Kind    ProfileDeltaKind
+	Lines   []envdiff.LineChange
+}
+
 // CompareVaultSnapshots returns a value-free semantic diff. Ciphertexts are
 // decrypted only in memory, and only when profile checksums differ.
 func CompareVaultSnapshots(baseFiles, currentFiles map[string][]byte) (VaultDelta, error) {
@@ -83,6 +90,57 @@ func CompareVaultSnapshots(baseFiles, currentFiles map[string][]byte) (VaultDelt
 		}
 	}
 	return delta, nil
+}
+
+// CompareVaultSnapshotLines decrypts changed profiles in memory for an
+// explicitly requested plaintext view. Callers must discard the result when
+// the view is hidden or closed.
+func CompareVaultSnapshotLines(baseFiles, currentFiles map[string][]byte) ([]ProfileLineDelta, error) {
+	baseManifest, err := manifestFromSnapshot(baseFiles)
+	if err != nil {
+		return nil, fmt.Errorf("read base vault snapshot: %w", err)
+	}
+	currentManifest, err := manifestFromSnapshot(currentFiles)
+	if err != nil {
+		return nil, fmt.Errorf("read current vault snapshot: %w", err)
+	}
+	identity, identityErr := LoadIdentity()
+	deltas := make([]ProfileLineDelta, 0)
+	for _, ref := range profileUnion(baseManifest, currentManifest) {
+		baseProfile, inBase := profileAt(baseManifest, ref)
+		currentProfile, inCurrent := profileAt(currentManifest, ref)
+		if inBase && inCurrent && baseProfile.Checksum == currentProfile.Checksum {
+			continue
+		}
+		if identityErr != nil {
+			return nil, fmt.Errorf("load identity for plaintext vault diff: %w", identityErr)
+		}
+		var basePlaintext, currentPlaintext []byte
+		kind := ProfileChanged
+		if inBase {
+			basePlaintext, err = decryptSnapshotProfile(baseFiles, ref, baseProfile.Checksum, identity)
+			if err != nil {
+				return nil, fmt.Errorf("read base profile %s/%s: %w", ref.project, ref.profile, err)
+			}
+		} else {
+			kind = ProfileAdded
+		}
+		if inCurrent {
+			currentPlaintext, err = decryptSnapshotProfile(currentFiles, ref, currentProfile.Checksum, identity)
+			if err != nil {
+				return nil, fmt.Errorf("read current profile %s/%s: %w", ref.project, ref.profile, err)
+			}
+		} else {
+			kind = ProfileRemoved
+		}
+		deltas = append(deltas, ProfileLineDelta{
+			Project: ref.project,
+			Profile: ref.profile,
+			Kind:    kind,
+			Lines:   envdiff.CompareLines(basePlaintext, currentPlaintext),
+		})
+	}
+	return deltas, nil
 }
 
 func profileSnapshotChanged(baseFiles, currentFiles map[string][]byte, ref profileRef, base, current Profile) bool {

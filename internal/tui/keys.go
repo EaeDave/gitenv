@@ -44,6 +44,16 @@ func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.confirmSyncKey(key)
 	case screenConfirmCapture:
 		return m.confirmCaptureKey(key)
+	case screenSyncDiff:
+		return m.syncDiffKey(key)
+	case screenConfirmDiffPublish:
+		return m.confirmDiffActionKey(key, true)
+	case screenConfirmDiffDiscard:
+		return m.confirmDiffActionKey(key, false)
+	case screenEditor:
+		return m.editorKey(key)
+	case screenConfirmEditorDiscard:
+		return m.confirmEditorDiscardKey(key)
 	}
 	return m, nil
 }
@@ -224,6 +234,9 @@ func (m model) projectsKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.syncVault(true)
 	case "s":
 		return m.requestContextualSync()
+	case "v":
+		m.screen = screenSyncDiff
+		m.syncDiffOffset = 0
 	case "g":
 		m.screen, m.menuCursor = screenRemote, 0
 	case "b":
@@ -234,6 +247,56 @@ func (m model) projectsKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.syncStatus.State = gitops.SyncChecking
 		return m, tea.Batch(loadCmd(m.cfg, m.cwd), inspectSyncCmd(m.cfg))
+	}
+	return m, nil
+}
+
+func (m model) syncDiffKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	pageSize := m.syncDiffPageSize()
+	m.syncDiffOffset = clampSyncDiffOffset(m.syncDiffOffset, len(m.syncDiffLines()), pageSize)
+	switch key.String() {
+	case "esc", "q":
+		m.screen = screenProjects
+		m.syncDiffOffset = 0
+		m.syncLineDiff = nil
+		m.syncDiffLoading = false
+	case "x":
+		if m.syncDiffLoading {
+			return m, nil
+		}
+		if m.syncLineDiff != nil {
+			m.syncLineDiff = nil
+			m.syncDiffOffset = 0
+			return m, nil
+		}
+		m.busy = true
+		m.syncDiffLoading = true
+		m.errText = ""
+		return m, revealSyncDiffCmd(m.cfg, m.syncStatus)
+	case "tab":
+		m = m.selectNextSyncDiff(1)
+	case "shift+tab":
+		m = m.selectNextSyncDiff(-1)
+	case "p":
+		return m.requestDiffPublish()
+	case "d":
+		return m.requestDiffDiscard()
+	case "e":
+		if target, ok := m.selectedSyncDiffTarget(); ok {
+			return m.openEditor(target.project, screenSyncDiff)
+		}
+	case "up", "k":
+		m.syncDiffOffset = max(0, m.syncDiffOffset-1)
+	case "down", "j":
+		m.syncDiffOffset = min(m.syncDiffMaxOffset(), m.syncDiffOffset+1)
+	case "pgup", "ctrl+b":
+		m.syncDiffOffset = max(0, m.syncDiffOffset-pageSize)
+	case "pgdown", "ctrl+f", " ":
+		m.syncDiffOffset = min(m.syncDiffMaxOffset(), m.syncDiffOffset+pageSize)
+	case "home", "g":
+		m.syncDiffOffset = 0
+	case "end", "G":
+		m.syncDiffOffset = m.syncDiffMaxOffset()
 	}
 	return m, nil
 }
@@ -390,6 +453,8 @@ func (m model) profilesKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.screen = screenNewProfile
 		m.fields = []field{{"New profile name", "", false}}
 		m.fieldCursor = 0
+	case "e":
+		return m.openEditor(m.selectedProject, screenProfiles)
 	case "d":
 		m.requestProfileRemoval()
 	case "s":

@@ -79,6 +79,16 @@ func (m model) renderScreen(width int) string {
 		return m.renderSyncConfirmation(width)
 	case screenConfirmCapture:
 		return m.renderCapturePreview(width)
+	case screenSyncDiff:
+		return m.renderSyncDiff(width)
+	case screenConfirmDiffPublish:
+		return m.renderConfirmation("Publish selected environment?", fmt.Sprintf("Capture %s/%s and publish its encrypted vault change? [y/N]", m.pendingDiffProject, m.pendingDiffProfile), width)
+	case screenConfirmDiffDiscard:
+		return m.renderConfirmation("Discard selected environment change?", fmt.Sprintf("Restore %s/%s from its active encrypted profile? [y/N]", m.pendingDiffProject, m.pendingDiffProfile), width)
+	case screenEditor:
+		return m.renderEditor(width)
+	case screenConfirmEditorDiscard:
+		return m.renderConfirmation("Discard unsaved changes?", "The .env editor has unsaved changes. Discard them? [y/N]", width)
 	default:
 		return ""
 	}
@@ -176,7 +186,7 @@ func (m model) renderProjects(width int) string {
 	} else {
 		workspace = lipgloss.JoinVertical(lipgloss.Left, renderPanel("Workspace", workspace, width, false), "", renderPanel("Projects", projectList, width, true))
 	}
-	help := renderHelp("enter", "profiles", "s", "sync", "c", "capture", "a", "add", "g", "remote", "r", "reload", "q", "quit")
+	help := renderHelp("enter", "profiles", "v", "view changes", "s", "sync", "c", "capture", "a", "add", "g", "remote", "r", "reload", "q", "quit")
 	return lipgloss.JoinVertical(lipgloss.Left, workspace, "", syncPanel, "", help)
 }
 
@@ -215,7 +225,7 @@ func (m model) renderProjectList() string {
 
 func (m model) renderProfiles(width int) string {
 	local := m.cfg.Projects[m.selectedProject]
-	details := labelValue("Path", local.Path) + "\n" + labelValue("Active", valueOrNone(local.ActiveProfile)) + "\n" + labelValue("Status", m.statuses[m.selectedProject])
+	details := labelValue("Path", local.Path) + "\n" + labelValue("Active", valueOrNone(local.ActiveProfile)) + "\n" + styles.label.Render("Status  ") + renderStatus(m.statuses[m.selectedProject])
 	profiles := m.renderProfileList(local.ActiveProfile)
 	if width >= compactViewWidth {
 		listWidth := max(28, width/3)
@@ -224,7 +234,7 @@ func (m model) renderProfiles(width int) string {
 		profiles = lipgloss.JoinVertical(lipgloss.Left, renderPanel(m.selectedProject, details, width, false), "", renderPanel("Profiles", profiles, width, true))
 	}
 	syncPanel := renderPanel("Sync", m.renderSyncStatus(), width, false)
-	help := renderHelp("enter", "apply", "s", "sync", "c", "capture", "n", "new", "d", "remove", "esc", "back")
+	help := renderHelp("enter", "apply", "e", "edit", "s", "sync", "c", "capture", "n", "new", "d", "remove", "esc", "back")
 	return lipgloss.JoinVertical(lipgloss.Left, profiles, "", syncPanel, "", help)
 }
 
@@ -232,19 +242,30 @@ func (m model) renderProfileList(activeProfile string) string {
 	if len(m.profiles) == 0 {
 		return styles.muted.Render("No profiles captured.")
 	}
+	statuses := m.profileStatuses[m.selectedProject]
 	rows := make([]string, 0, len(m.profiles))
 	for index, profile := range m.profiles {
-		badge := ""
-		if profile == activeProfile {
-			badge = "  " + styles.success.Render("● active")
-		}
-		row := "  " + profile + badge
+		label := "  " + profile
 		if index == m.profileCursor {
-			row = styles.selected.Render("› "+profile) + badge
+			label = styles.selected.Render("› " + profile)
 		}
-		rows = append(rows, row)
+		rows = append(rows, label+profileBadge(profile == activeProfile, statuses[profile]))
 	}
 	return strings.Join(rows, "\n")
+}
+
+func profileBadge(active bool, status string) string {
+	switch {
+	case active && status == "modified":
+		return "  " + styles.success.Render("● active") + styles.muted.Render(" · ") + styles.warning.Render("modified")
+	case active && status == "missing":
+		return "  " + styles.success.Render("● active") + styles.muted.Render(" · ") + styles.warning.Render("no .env")
+	case active:
+		return "  " + styles.success.Render("● active")
+	case status == "current":
+		return "  " + styles.muted.Render("○ matches .env")
+	}
+	return ""
 }
 
 func (m model) renderSyncStatus() string {

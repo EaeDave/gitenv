@@ -1,12 +1,14 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/eaedave/gitenv/internal/app"
 	"github.com/eaedave/gitenv/internal/envdiff"
@@ -777,6 +779,243 @@ func TestSyncPanelFailsClosedWhenInventoryUnavailable(t *testing.T) {
 	view := m.View()
 	if !strings.Contains(view, "change details unavailable") || strings.Contains(view, "DATABASE_URL") {
 		t.Fatalf("unavailable inventory did not fail closed:\n%s", view)
+	}
+}
+
+func TestSyncDiffViewerOpensScrollsAndReturnsWithoutValues(t *testing.T) {
+	changes := make([]envdiff.Change, 0, 14)
+	for index := range 14 {
+		changes = append(changes, envdiff.Change{Key: fmt.Sprintf("KEY_%02d", index), Kind: envdiff.Changed})
+	}
+	cfg := vault.LocalConfig{VaultPath: "/vault"}
+	m := model{
+		cfg:        &cfg,
+		screen:     screenProjects,
+		width:      100,
+		height:     20,
+		syncStatus: gitops.SyncStatus{State: gitops.SyncLocalAhead, Ahead: 1},
+		syncInventory: app.SyncInventory{
+			Available: true,
+			LocalEnvs: []app.LocalEnvDelta{{
+				Project: "millennium-api-docs", Profile: "prod",
+				Diff: envdiff.Diff{Changes: []envdiff.Change{{Key: "LOCAL_KEY", Kind: envdiff.Changed}}},
+			}},
+			Committed: vault.VaultDelta{Profiles: []vault.ProfileDelta{{
+				Project: "api", Profile: "prod", Kind: vault.ProfileChanged, Diff: envdiff.Diff{Changes: changes},
+			}}},
+		},
+	}
+
+	opened, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	m = opened.(model)
+	if cmd != nil || m.screen != screenSyncDiff || m.syncDiffOffset != 0 {
+		t.Fatalf("v did not open diff viewer: %#v", m)
+	}
+	firstPage := m.View()
+	for _, expected := range []string{"Environment changes", "Local .env changes", "millennium-api-docs / prod", "LOCAL_KEY", "Lines 1–8 of", "esc/q", "back"} {
+		if !strings.Contains(firstPage, expected) {
+			t.Fatalf("diff viewer missing %q:\n%s", expected, firstPage)
+		}
+	}
+	if strings.Contains(firstPage, "KEY_13") {
+		t.Fatalf("first page ignored viewport limit:\n%s", firstPage)
+	}
+
+	ended, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnd})
+	m = ended.(model)
+	lastPage := m.View()
+	if m.syncDiffOffset != m.syncDiffMaxOffset() || !strings.Contains(lastPage, "KEY_13") || !strings.Contains(lastPage, "Values hidden") {
+		t.Fatalf("end did not reveal final value-free page: offset=%d max=%d\n%s", m.syncDiffOffset, m.syncDiffMaxOffset(), lastPage)
+	}
+	for _, secret := range []string{"postgres://production-secret", "token-value"} {
+		if strings.Contains(strings.Join(m.syncDiffLines(), "\n"), secret) {
+			t.Fatalf("diff viewer exposed %q", secret)
+		}
+	}
+
+	back, backCmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if backCmd != nil || back.(model).screen != screenProjects || back.(model).syncDiffOffset != 0 {
+		t.Fatalf("esc did not return to dashboard: %#v", back)
+	}
+}
+
+func TestSyncDiffViewerClampsPagingAndShowsUnavailableState(t *testing.T) {
+	cfg := vault.LocalConfig{VaultPath: "/vault"}
+	m := model{
+		cfg:            &cfg,
+		screen:         screenSyncDiff,
+		width:          80,
+		height:         14,
+		syncStatus:     gitops.SyncStatus{State: gitops.SyncLocalAhead, Dirty: true},
+		syncInventory:  app.SyncInventory{Detail: "change details unavailable"},
+		syncDiffOffset: 100,
+	}
+	next, _ := m.syncDiffKey(tea.KeyMsg{Type: tea.KeyPgDown})
+	m = next.(model)
+	if m.syncDiffOffset != m.syncDiffMaxOffset() || !strings.Contains(m.View(), "change details unavailable") {
+		t.Fatalf("unavailable viewer did not clamp or fail closed: offset=%d max=%d\n%s", m.syncDiffOffset, m.syncDiffMaxOffset(), m.View())
+	}
+}
+
+func TestSyncDiffViewerRevealsAndDiscardsLiteralValues(t *testing.T) {
+	cfg := vault.LocalConfig{VaultPath: "/vault"}
+	m := model{
+		cfg:           &cfg,
+		screen:        screenSyncDiff,
+		width:         100,
+		height:        24,
+		syncStatus:    gitops.SyncStatus{State: gitops.SyncSynced},
+		syncInventory: app.SyncInventory{Available: true},
+	}
+
+	loading, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m = loading.(model)
+	if cmd == nil || !m.syncDiffLoading || !m.busy {
+		t.Fatalf("x did not start explicit reveal: %#v", m)
+	}
+	revealed, _ := m.Update(syncLineDiffMsg{diff: app.SyncLineDiff{LocalEnvs: []app.LocalEnvLineDelta{{
+		Project: "api", Profile: "prod", Lines: []envdiff.LineChange{
+			{Kind: envdiff.LineRemoved, OldLine: 7, Text: "API_KEY=old-secret"},
+			{Kind: envdiff.LineAdded, NewLine: 7, Text: "API_KEY=new-secret\x1b[31m"},
+		},
+	}}}})
+	m = revealed.(model)
+	view := m.View()
+	for _, expected := range []string{"Local .env values", `-    7 │ "API_KEY=old-secret"`, `+    7 │ "API_KEY=new-secret\x1b[31m"`, "Values visible", "x hide values"} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("revealed viewer missing %q:\n%s", expected, view)
+		}
+	}
+	if strings.Contains(view, "\x1b[31m") {
+		t.Fatalf("terminal control sequence was rendered literally:\n%s", view)
+	}
+
+	hidden, hideCmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m = hidden.(model)
+	if hideCmd != nil || m.syncLineDiff != nil || strings.Contains(m.View(), "old-secret") {
+		t.Fatalf("second x did not discard plaintext: %#v\n%s", m, m.View())
+	}
+	m.syncLineDiff = &app.SyncLineDiff{LocalEnvs: []app.LocalEnvLineDelta{{Project: "api"}}}
+	closed, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if closed.(model).syncLineDiff != nil || closed.(model).screen != screenProjects {
+		t.Fatalf("escape retained plaintext state: %#v", closed)
+	}
+}
+
+func TestProfilesScreenHighlightsModifiedActiveProfile(t *testing.T) {
+	cfg := vault.LocalConfig{Projects: map[string]vault.LocalProject{
+		"api": {Path: "/tmp/api", ActiveProfile: "prod"},
+	}}
+	m := model{
+		cfg:             &cfg,
+		screen:          screenProfiles,
+		width:           100,
+		height:          24,
+		selectedProject: "api",
+		profiles:        []string{"dev", "prod"},
+		statuses:        map[string]string{"api": "modified"},
+		profileStatuses: map[string]map[string]string{"api": {"prod": "modified", "dev": ""}},
+	}
+	view := m.View()
+	for _, expected := range []string{"● active", "modified", "Status"} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("profiles view missing %q:\n%s", expected, view)
+		}
+	}
+	warning := lipgloss.NewStyle().Foreground(colors.warning).Render("modified")
+	if !strings.Contains(view, warning) {
+		t.Fatalf("modified marker was not rendered in warning color:\n%s", view)
+	}
+	if strings.Contains(view, "○ matches .env") {
+		t.Fatalf("inactive dev profile should not claim a disk match:\n%s", view)
+	}
+}
+
+func TestProfilesScreenFlagsInactiveProfileMatchingDisk(t *testing.T) {
+	cfg := vault.LocalConfig{Projects: map[string]vault.LocalProject{
+		"api": {Path: "/tmp/api", ActiveProfile: "prod"},
+	}}
+	m := model{
+		cfg:             &cfg,
+		screen:          screenProfiles,
+		width:           100,
+		height:          24,
+		selectedProject: "api",
+		profiles:        []string{"dev", "prod"},
+		statuses:        map[string]string{"api": "modified"},
+		profileStatuses: map[string]map[string]string{"api": {"prod": "modified", "dev": "current"}},
+	}
+	view := m.View()
+	if !strings.Contains(view, "○ matches .env") {
+		t.Fatalf("inactive matching profile not flagged:\n%s", view)
+	}
+}
+
+func TestSyncDiffViewerSelectsAndConfirmsOneEnvironmentAction(t *testing.T) {
+	cfg := vault.LocalConfig{VaultPath: "/vault"}
+	m := model{
+		cfg:        &cfg,
+		screen:     screenSyncDiff,
+		width:      100,
+		height:     24,
+		syncStatus: gitops.SyncStatus{State: gitops.SyncSynced},
+		syncInventory: app.SyncInventory{Available: true, LocalEnvs: []app.LocalEnvDelta{
+			{Project: "api", Profile: "dev", Diff: envdiff.Diff{Changes: []envdiff.Change{{Key: "FIRST", Kind: envdiff.Changed}}}},
+			{Project: "worker", Profile: "prod", Diff: envdiff.Diff{Changes: []envdiff.Change{{Key: "SECOND", Kind: envdiff.Changed}}}},
+		}},
+	}
+
+	view := m.View()
+	for _, expected := range []string{"› api / dev", "  worker / prod", "tab select env", "p publish", "d discard"} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("selected viewer missing %q:\n%s", expected, view)
+		}
+	}
+	selected, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	m = selected.(model)
+	if m.syncDiffSelection != 1 || !strings.Contains(m.View(), "› worker / prod") {
+		t.Fatalf("tab did not select second environment: %#v\n%s", m, m.View())
+	}
+
+	publish, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	m = publish.(model)
+	if cmd != nil || m.screen != screenConfirmDiffPublish || m.pendingDiffProject != "worker" || m.pendingDiffProfile != "prod" {
+		t.Fatalf("publish did not target selected environment: %#v", m)
+	}
+	if !strings.Contains(m.View(), "Capture worker/prod") {
+		t.Fatalf("publish confirmation omitted target:\n%s", m.View())
+	}
+	cancelled, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = cancelled.(model)
+	if m.screen != screenSyncDiff || m.pendingDiffProject != "" {
+		t.Fatalf("publish cancellation retained pending action: %#v", m)
+	}
+
+	discard, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = discard.(model)
+	if cmd != nil || m.screen != screenConfirmDiffDiscard || m.pendingDiffProject != "worker" {
+		t.Fatalf("discard did not target selected environment: %#v", m)
+	}
+	confirmed, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = confirmed.(model)
+	if cmd == nil || !m.busy || m.screen != screenProjects || m.pendingDiffProject != "" {
+		t.Fatalf("discard confirmation did not start selected action: %#v", m)
+	}
+}
+
+func TestSyncDiffViewerBlocksPublishWhenVaultIsNotCleanAndSynced(t *testing.T) {
+	m := model{
+		cfg:        &vault.LocalConfig{VaultPath: "/vault"},
+		screen:     screenSyncDiff,
+		syncStatus: gitops.SyncStatus{State: gitops.SyncLocalAhead, Dirty: true},
+		syncInventory: app.SyncInventory{LocalEnvs: []app.LocalEnvDelta{{
+			Project: "api", Profile: "dev", Diff: envdiff.Diff{Changes: []envdiff.Change{{Key: "KEY", Kind: envdiff.Changed}}},
+		}}},
+	}
+	next, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	got := next.(model)
+	if cmd != nil || got.screen != screenSyncDiff || got.errText == "" {
+		t.Fatalf("unsafe selected publish was not blocked: %#v", got)
 	}
 }
 
