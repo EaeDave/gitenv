@@ -2,6 +2,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/eaedave/gitenv/internal/app"
 	"github.com/eaedave/gitenv/internal/envdiff"
 	gitops "github.com/eaedave/gitenv/internal/git"
+	"github.com/eaedave/gitenv/internal/update"
 	"github.com/eaedave/gitenv/internal/vault"
 )
 
@@ -96,6 +98,16 @@ type capturePreviewMsg struct {
 	err     error
 }
 
+type updateCheckMsg struct {
+	latest    string
+	available bool
+}
+
+type updateAppliedMsg struct {
+	path string
+	err  error
+}
+
 type model struct {
 	cfg                                                    *vault.LocalConfig
 	cwd                                                    string
@@ -134,13 +146,17 @@ type model struct {
 	editorProject, editorBaseProfile                       string
 	editorCRLF, editorTrailingNewline, editorBaseAvailable bool
 	editorReturn                                           screen
+	version                                                string
+	updateLatest                                           string
+	updateAvailable, updating                              bool
+	pendingRestart                                         string
 }
 
-func newModel(cfg *vault.LocalConfig, cwd string) model {
+func newModel(cfg *vault.LocalConfig, cwd, version string) model {
 	activity := spinner.New()
 	activity.Spinner = spinner.Dot
 	activity.Style = styles.warning
-	m := model{cfg: cfg, cwd: cwd, statuses: map[string]string{}, spinner: activity, syncStatus: gitops.SyncStatus{State: gitops.SyncChecking}}
+	m := model{cfg: cfg, cwd: cwd, version: version, statuses: map[string]string{}, spinner: activity, syncStatus: gitops.SyncStatus{State: gitops.SyncChecking}}
 	current, err := app.DetectCurrent(*cfg, cwd)
 	if err == nil {
 		m.current = current
@@ -158,10 +174,56 @@ func newModel(cfg *vault.LocalConfig, cwd string) model {
 }
 
 func (m model) Init() tea.Cmd {
-	if m.cfg.VaultPath == "" {
-		return m.spinner.Tick
+	cmds := []tea.Cmd{m.spinner.Tick}
+	if !update.Disabled() && update.IsRelease(m.version) {
+		cmds = append(cmds, checkUpdateCmd(m.version))
 	}
-	return tea.Batch(loadCmd(m.cfg, m.cwd), inspectSyncCmd(m.cfg), m.spinner.Tick)
+	if m.cfg.VaultPath != "" {
+		cmds = append(cmds, loadCmd(m.cfg, m.cwd), inspectSyncCmd(m.cfg))
+	}
+	return tea.Batch(cmds...)
+}
+
+func checkUpdateCmd(current string) tea.Cmd {
+	return func() tea.Msg {
+		latest, newer, err := update.Check(context.Background(), current)
+		if err != nil {
+			return updateCheckMsg{}
+		}
+		return updateCheckMsg{latest: latest, available: newer}
+	}
+}
+
+func applyUpdateCmd(tag string) tea.Cmd {
+	return func() tea.Msg {
+		path, err := update.Apply(context.Background(), tag)
+		return updateAppliedMsg{path: path, err: err}
+	}
+}
+
+// canAutoUpdate reports whether it is safe to update without disrupting the
+// user: only on an idle landing screen, never mid-form or mid-operation.
+func (m model) canAutoUpdate() bool {
+	if m.busy || m.updating || m.pendingRestart != "" {
+		return false
+	}
+	switch m.screen {
+	case screenOnboarding, screenProjects, screenProfiles:
+		return true
+	default:
+		return false
+	}
+}
+
+func (m model) beginSelfUpdate() (tea.Model, tea.Cmd) {
+	if m.updateLatest == "" || m.updating {
+		return m, nil
+	}
+	m.busy = true
+	m.updating = true
+	m.errText = ""
+	m.info = "updating to " + m.updateLatest + "…"
+	return m, applyUpdateCmd(m.updateLatest)
 }
 
 func loadCmd(cfg *vault.LocalConfig, cwd string) tea.Cmd {
@@ -268,6 +330,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case syncStatusMsg:
 		m.syncStatus, m.syncInventory = msg.status, msg.inventory
 		return m, nil
+
+	case updateCheckMsg:
+		if msg.available {
+			m.updateLatest = msg.latest
+			m.updateAvailable = true
+			if m.canAutoUpdate() {
+				return m.beginSelfUpdate()
+			}
+		}
+		return m, nil
+
+	case updateAppliedMsg:
+		m.busy = false
+		m.updating = false
+		if msg.err != nil {
+			m.updateAvailable = false
+			m.errText = "update failed: " + safeError(msg.err)
+			return m, nil
+		}
+		m.pendingRestart = msg.path
+		return m, tea.Quit
 
 	case syncLineDiffMsg:
 		m.busy = false
@@ -409,13 +492,17 @@ func safeError(err error) string {
 	return text
 }
 
-func Run(cfg *vault.LocalConfig, cwd string) error {
+func Run(cfg *vault.LocalConfig, cwd, version string) (string, error) {
 	if cfg == nil {
-		return errors.New("gitenv tui: config must not be nil")
+		return "", errors.New("gitenv tui: config must not be nil")
 	}
-	program := tea.NewProgram(newModel(cfg, cwd), tea.WithAltScreen())
-	if _, err := program.Run(); err != nil {
-		return fmt.Errorf("gitenv tui: %w", err)
+	program := tea.NewProgram(newModel(cfg, cwd, version), tea.WithAltScreen())
+	final, err := program.Run()
+	if err != nil {
+		return "", fmt.Errorf("gitenv tui: %w", err)
 	}
-	return nil
+	if m, ok := final.(model); ok {
+		return m.pendingRestart, nil
+	}
+	return "", nil
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/eaedave/gitenv/internal/app"
 	gitops "github.com/eaedave/gitenv/internal/git"
 	"github.com/eaedave/gitenv/internal/tui"
+	"github.com/eaedave/gitenv/internal/update"
 	"github.com/eaedave/gitenv/internal/vault"
 )
 
@@ -50,6 +51,8 @@ func run(args []string) error {
 		return syncCommand(true)
 	case "tui":
 		return runTUI()
+	case "update", "--update":
+		return updateCommand(args[1:])
 	case "help", "--help", "-h":
 		usage()
 		return nil
@@ -74,7 +77,24 @@ func runTUI() error {
 	if err != nil {
 		return err
 	}
-	return tui.Run(&cfg, cwd)
+	restart, err := tui.Run(&cfg, cwd, version)
+	if err != nil {
+		return err
+	}
+	if restart != "" {
+		return update.Restart(restart)
+	}
+	return nil
+}
+
+func updateCommand(args []string) error {
+	force := false
+	for _, arg := range args {
+		if arg == "--force" || arg == "-f" {
+			force = true
+		}
+	}
+	return update.RunCLI(version, force)
 }
 
 func usage() {
@@ -95,6 +115,7 @@ Usage:
   gitenv pull
   gitenv push
   gitenv tui
+  gitenv update [--force]
 `)
 }
 

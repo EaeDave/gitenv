@@ -13,6 +13,9 @@ func (m model) View() string {
 	width := availableWidth(m.width)
 	body := m.renderScreen(width)
 	sections := []string{m.renderHeader(width), body}
+	if m.updateAvailable && !m.updating {
+		sections = append(sections, styles.warning.Render("↑ gitenv "+m.updateLatest+" available — press U to update"))
+	}
 	if notice := m.renderNotice(); notice != "" {
 		sections = append(sections, notice)
 	}
@@ -29,7 +32,11 @@ func (m model) renderHeader(width int) string {
 		if activity == "" {
 			activity = "●"
 		}
-		state = styles.warning.Render(activity + " working…")
+		label := "working…"
+		if m.updating {
+			label = "updating to " + m.updateLatest + "…"
+		}
+		state = styles.warning.Render(activity + " " + label)
 	}
 	gap := max(1, width-lipgloss.Width(left)-lipgloss.Width(state)-4)
 	return left + strings.Repeat(" ", gap) + state

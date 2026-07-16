@@ -27,7 +27,7 @@ func TestOnboardingAndContextualAddFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := vault.LocalConfig{Projects: map[string]vault.LocalProject{}}
-	m := newModel(&cfg, project)
+	m := newModel(&cfg, project, "dev")
 	if m.screen != screenOnboarding || !m.current.HasEnv {
 		t.Fatalf("unexpected initial state: screen=%v current=%#v", m.screen, m.current)
 	}

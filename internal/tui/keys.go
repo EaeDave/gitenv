@@ -17,6 +17,12 @@ func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if key.String() == "ctrl+c" {
 		return m, tea.Quit
 	}
+	if key.String() == "U" && m.updateAvailable && !m.updating {
+		switch m.screen {
+		case screenOnboarding, screenProjects, screenProfiles:
+			return m.beginSelfUpdate()
+		}
+	}
 	switch m.screen {
 	case screenOnboarding:
 		return m.onboardingKey(key)

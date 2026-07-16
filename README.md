@@ -50,6 +50,19 @@ go install github.com/eaedave/gitenv/cmd/gitenv@latest
 go build -o gitenv ./cmd/gitenv
 ```
 
+### Updating
+
+gitenv can update itself from GitHub Releases:
+
+```bash
+gitenv update          # install the latest release if newer
+gitenv update --force  # reinstall the latest release regardless
+```
+
+When launched, the TUI checks for a newer release in the background. If one is
+found it updates in place and relaunches automatically; you can also press `U`
+to update on demand. Set `GITENV_NO_UPDATE=1` to disable the automatic check.
+
 ## Quick start
 
 Run `gitenv` inside a project that has a `.env`:
@@ -83,6 +96,7 @@ c       capture the active profile
 n       create a new profile
 d       remove an inactive profile
 r       reload status
+U       update to a newer release (when available)
 p       browse all projects (when focused on one)
 esc/q   back / quit
 ```
@@ -118,6 +132,7 @@ gitenv switch <project> <profile> [--force]
 gitenv status
 gitenv pull
 gitenv push
+gitenv update [--force]
 gitenv version
 ```
 
@@ -182,6 +197,10 @@ mais recente, verificam o checksum SHA-256 e instalam em `~/.local/bin` ou
 `%LOCALAPPDATA%\gitenv\bin`. Use `GITENV_VERSION` para fixar uma versão e
 `GITENV_INSTALL_DIR` para trocar o destino. Para compilar do fonte (Go 1.24+):
 `go build -o gitenv ./cmd/gitenv`.
+
+Para atualizar: `gitenv update` (ou `--force`). Ao abrir, a TUI checa uma
+release mais nova em segundo plano e, se houver, se atualiza e reabre sozinha —
+ou aperte `U`. Use `GITENV_NO_UPDATE=1` para desativar a checagem automática.
 
 ### Começando
 
