@@ -97,7 +97,7 @@ func CommitAndPush(root, message string) error {
 		return fmt.Errorf("check staged git changes: %w", commandError(err, "", ""))
 	}
 
-	if _, err := run(root, "commit", "-m", message); err != nil {
+	if _, err := run(root, "-c", "user.name=gitenv", "-c", "user.email=gitenv@localhost", "commit", "-m", message); err != nil {
 		return fmt.Errorf("commit git changes: %w", err)
 	}
 
