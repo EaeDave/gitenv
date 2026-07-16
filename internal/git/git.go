@@ -2,6 +2,7 @@ package git
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var credentialsInURL = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@\s]+@`)
@@ -54,6 +56,20 @@ func Pull(root string) error {
 	}
 	if _, err := run(root, "merge", "--ff-only", "@{upstream}"); err != nil {
 		return fmt.Errorf("fast-forward git repository: %w", err)
+	}
+	return nil
+}
+
+// Push publishes existing local commits without staging or committing working-tree changes.
+func Push(root string) error {
+	if hasUpstream(root) {
+		if _, err := run(root, "push"); err != nil {
+			return fmt.Errorf("push git repository: %w", err)
+		}
+		return nil
+	}
+	if _, err := run(root, "push", "--set-upstream", "origin", "HEAD"); err != nil {
+		return fmt.Errorf("push git repository: %w", err)
 	}
 	return nil
 }
@@ -121,6 +137,26 @@ func command(dir string, args ...string) (string, string, error) {
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	return stdout.String(), stderr.String(), err
+}
+
+func runWithTimeout(dir string, timeout time.Duration, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	if err != nil {
+		return "", commandError(err, stdout.String(), stderr.String())
+	}
+	return stdout.String(), nil
 }
 
 func commandError(err error, stdout, stderr string) error {

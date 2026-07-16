@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/eaedave/gitenv/internal/app"
+	gitops "github.com/eaedave/gitenv/internal/git"
 	"github.com/eaedave/gitenv/internal/vault"
 )
 
@@ -37,6 +38,7 @@ const (
 	screenConfirmDisconnect
 	screenConfirm
 	screenConfirmDelete
+	screenConfirmSync
 )
 
 type field struct {
@@ -61,6 +63,10 @@ type reloadMsg struct {
 	needsUnlock              bool
 }
 
+type syncStatusMsg struct {
+	status gitops.SyncStatus
+}
+
 type model struct {
 	cfg                                                   *vault.LocalConfig
 	cwd                                                   string
@@ -70,6 +76,7 @@ type model struct {
 	projects, profiles                                    []string
 	projectCursor, profileCursor, menuCursor, fieldCursor int
 	selectedProject, pendingProfile                       string
+	pendingSync                                           gitops.SyncState
 	screen                                                screen
 	fields                                                []field
 	info, errText                                         string
@@ -78,6 +85,7 @@ type model struct {
 	remoteDisplayURL                                      string // redacted display URL
 	accessRequired                                        bool
 	migrationRecoveryRequired                             bool
+	syncStatus                                            gitops.SyncStatus
 	width, height                                         int
 	spinner                                               spinner.Model
 }
@@ -86,7 +94,7 @@ func newModel(cfg *vault.LocalConfig, cwd string) model {
 	activity := spinner.New()
 	activity.Spinner = spinner.Dot
 	activity.Style = styles.warning
-	m := model{cfg: cfg, cwd: cwd, statuses: map[string]string{}, spinner: activity}
+	m := model{cfg: cfg, cwd: cwd, statuses: map[string]string{}, spinner: activity, syncStatus: gitops.SyncStatus{State: gitops.SyncChecking}}
 	current, err := app.DetectCurrent(*cfg, cwd)
 	if err == nil {
 		m.current = current
@@ -103,7 +111,7 @@ func (m model) Init() tea.Cmd {
 	if m.cfg.VaultPath == "" {
 		return m.spinner.Tick
 	}
-	return tea.Batch(loadCmd(m.cfg, m.cwd), m.spinner.Tick)
+	return tea.Batch(loadCmd(m.cfg, m.cwd), inspectSyncCmd(m.cfg), m.spinner.Tick)
 }
 
 func loadCmd(cfg *vault.LocalConfig, cwd string) tea.Cmd {
@@ -166,6 +174,12 @@ func loadCmd(cfg *vault.LocalConfig, cwd string) tea.Cmd {
 	}
 }
 
+func inspectSyncCmd(cfg *vault.LocalConfig) tea.Cmd {
+	return func() tea.Msg {
+		return syncStatusMsg{status: app.InspectSync(*cfg)}
+	}
+}
+
 func opCmd(fn func() error, info string) tea.Cmd {
 	return func() tea.Msg {
 		if err := fn(); err != nil {
@@ -186,6 +200,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
+
+	case syncStatusMsg:
+		m.syncStatus = msg.status
+		return m, nil
 
 	case reloadMsg:
 		m.busy = false
@@ -249,7 +267,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case screenEnrollRequest:
 				m.screen = screenUnlock
 			}
-			return m, loadCmd(m.cfg, m.cwd)
+			return m, tea.Batch(loadCmd(m.cfg, m.cwd), inspectSyncCmd(m.cfg))
 		}
 
 	case tea.KeyMsg:

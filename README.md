@@ -17,7 +17,8 @@
 - `capture` criptografa o `.env` atual preservando comentários, linhas desativadas, ordem e quebras de linha byte a byte. `switch` aplica um perfil ao projeto vinculado.
 - Um `.env` modificado depois da última captura nunca é sobrescrito silenciosamente: a CLI exige `--force`; a TUI exige confirmação explícita.
 - Um perfil ativo não pode ser removido; aplique outro primeiro. Remover perfil inativo exige confirmação e elimina apenas ciphertext e metadados do vault.
-- `pull` atualiza somente o vault criptografado; aplicar perfis locais é sempre explícito. `push` publica mudanças criptografadas com Git.
+- A TUI distingue o estado do `.env` em relação ao perfil ativo do estado do vault local em relação ao remoto. A verificação remota faz apenas `fetch`, expira após oito segundos e informa sincronizado, mudanças locais, mudanças remotas, divergência, falta de remoto, indisponibilidade ou falha de autenticação.
+- O atalho `s` propõe a ação adequada e exige confirmação antes de baixar ou publicar. Divergências e estados indisponíveis são bloqueados com orientação; sincronizar nunca aplica um perfil nem modifica arquivos `.env` locais. Os atalhos `p` e `u` permanecem disponíveis como operações avançadas explícitas.
 - Git armazena somente ciphertext, metadados e material público/embrulhado. Recovery identity e senha mestra exigem guarda separada; perder ambas as formas de acesso torna os perfis irrecuperáveis.
 <!-- business-readme:business-rules:end -->
 
@@ -54,7 +55,7 @@ No primeiro uso, a TUI guia o processo completo:
 
 Se não houver mais nenhuma credencial, escolha **Disconnect this vault and start again**. O vínculo/configuração local será limpo, mas o diretório do vault e o remoto Git não serão apagados.
 
-Depois, a tela principal responsiva permite aplicar/capturar/criar/remover perfis, executar pull/push, administrar o remoto do vault e exportar recovery. Em terminais largos, projetos e detalhes aparecem lado a lado; em terminais estreitos, os painéis são empilhados sem depender apenas de cores para comunicar estado.
+Depois, a tela principal responsiva permite aplicar/capturar/criar/remover perfis, sincronizar conforme o estado detectado, administrar o remoto do vault e exportar recovery. Em terminais largos, projetos e detalhes aparecem lado a lado; em terminais estreitos, os painéis são empilhados sem depender apenas de cores para comunicar estado.
 
 Atalhos principais:
 
@@ -64,8 +65,9 @@ a      adicionar projeto atual
 c      capturar perfil ativo
 n      criar perfil (dentro do projeto)
 d      remover perfil inativo (dentro do projeto)
-p      pull do vault
-u      push do vault
+s      sincronizar conforme o estado remoto detectado
+p      pull explícito do vault (avançado)
+u      push explícito do vault (avançado)
 g      administrar remoto do vault (trocar/testar/remover)
 b      exportar recovery identity
 r      recarregar

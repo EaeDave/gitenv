@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/eaedave/gitenv/internal/app"
+	gitops "github.com/eaedave/gitenv/internal/git"
 	"github.com/eaedave/gitenv/internal/vault"
 )
 
@@ -39,6 +40,8 @@ func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.confirmKey(key)
 	case screenConfirmDelete:
 		return m.confirmDeleteKey(key)
+	case screenConfirmSync:
+		return m.confirmSyncKey(key)
 	}
 	return m, nil
 }
@@ -218,6 +221,8 @@ func (m model) projectsKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.syncVault(false)
 	case "u":
 		return m.syncVault(true)
+	case "s":
+		return m.requestContextualSync()
 	case "g":
 		m.screen, m.menuCursor = screenRemote, 0
 	case "b":
@@ -226,7 +231,8 @@ func (m model) projectsKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.fields = []field{{"Recovery backup path", filepath.Join(home, "gitenv-recovery.txt"), false}}
 		m.fieldCursor = 0
 	case "r":
-		return m, loadCmd(m.cfg, m.cwd)
+		m.syncStatus.State = gitops.SyncChecking
+		return m, tea.Batch(loadCmd(m.cfg, m.cwd), inspectSyncCmd(m.cfg))
 	}
 	return m, nil
 }
@@ -386,6 +392,8 @@ func (m model) profilesKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.fieldCursor = 0
 	case "d":
 		m.requestProfileRemoval()
+	case "s":
+		return m.requestContextualSync()
 	}
 	return m, nil
 }

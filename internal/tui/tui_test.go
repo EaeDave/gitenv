@@ -501,6 +501,76 @@ func TestStatusRenderingIncludesTextWithoutColor(t *testing.T) {
 	}
 }
 
+func TestSyncStatusMessageUpdatesWithoutBlockingUI(t *testing.T) {
+	cfg := vault.LocalConfig{}
+	m := model{cfg: &cfg, screen: screenProjects, syncStatus: gitops.SyncStatus{State: gitops.SyncChecking}}
+	checked := gitops.SyncStatus{State: gitops.SyncRemoteAhead, Behind: 2}
+	next, cmd := m.Update(syncStatusMsg{status: checked})
+	got := next.(model)
+	if cmd != nil || got.busy || got.screen != screenProjects || got.syncStatus != checked {
+		t.Fatalf("async sync update disrupted UI: %#v cmd=%v", got, cmd)
+	}
+}
+
+func TestSyncPanelSeparatesEnvironmentAndRemoteState(t *testing.T) {
+	cfg := vault.LocalConfig{VaultPath: "/vault", Projects: map[string]vault.LocalProject{"api": {Path: "/api", ActiveProfile: "dev"}}}
+	m := model{
+		cfg:              &cfg,
+		screen:           screenProjects,
+		projects:         []string{"api"},
+		statuses:         map[string]string{"api": "clean"},
+		remoteDisplayURL: "github.com/example/vault",
+		syncStatus:       gitops.SyncStatus{State: gitops.SyncRemoteAhead, Behind: 2},
+	}
+	view := m.View()
+	for _, text := range []string{"clean", "Sync", "↓ 2 remote update(s)", "Press s to download", "Local .env files"} {
+		if text == "Local .env files" {
+			continue
+		}
+		if !strings.Contains(view, text) {
+			t.Fatalf("sync panel missing %q:\n%s", text, view)
+		}
+	}
+}
+
+func TestContextualSyncRequiresConfirmation(t *testing.T) {
+	cfg := vault.LocalConfig{VaultPath: "/vault"}
+	for _, tc := range []struct {
+		state gitops.SyncState
+		want  string
+	}{
+		{gitops.SyncRemoteAhead, "Download remote vault updates?"},
+		{gitops.SyncLocalAhead, "Publish local vault changes?"},
+	} {
+		m := model{cfg: &cfg, screen: screenProjects, syncStatus: gitops.SyncStatus{State: tc.state}}
+		next, cmd := m.requestContextualSync()
+		got := next.(model)
+		if cmd != nil || got.screen != screenConfirmSync || got.pendingSync != tc.state {
+			t.Fatalf("state %q did not request confirmation: %#v", tc.state, got)
+		}
+		view := got.View()
+		if !strings.Contains(view, tc.want) || !strings.Contains(view, "Local .env files will not be modified") {
+			t.Fatalf("confirmation for %q is unclear:\n%s", tc.state, view)
+		}
+		cancelled, cancelCmd := got.confirmSyncKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+		if cancelCmd != nil || cancelled.(model).screen != screenProjects {
+			t.Fatalf("sync cancellation failed: %#v", cancelled)
+		}
+	}
+}
+
+func TestContextualSyncBlocksUnsafeStates(t *testing.T) {
+	cfg := vault.LocalConfig{VaultPath: "/vault"}
+	for _, state := range []gitops.SyncState{gitops.SyncDiverged, gitops.SyncOffline, gitops.SyncAuthError, gitops.SyncNoRemote} {
+		m := model{cfg: &cfg, screen: screenProjects, syncStatus: gitops.SyncStatus{State: state}}
+		next, cmd := m.requestContextualSync()
+		got := next.(model)
+		if cmd != nil || got.screen != screenProjects || got.errText == "" {
+			t.Fatalf("unsafe state %q was not blocked: %#v cmd=%v", state, got, cmd)
+		}
+	}
+}
+
 func lineContaining(t *testing.T, text, fragment string) int {
 	t.Helper()
 	for index, line := range strings.Split(text, "\n") {

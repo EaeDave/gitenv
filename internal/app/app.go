@@ -264,6 +264,10 @@ func Pull(cfg vault.LocalConfig) error { return gitops.Pull(cfg.VaultPath) }
 func Push(cfg vault.LocalConfig) error {
 	return gitops.CommitAndPush(cfg.VaultPath, "gitenv: update encrypted profiles")
 }
+func PushExisting(cfg vault.LocalConfig) error { return gitops.Push(cfg.VaultPath) }
+func InspectSync(cfg vault.LocalConfig) gitops.SyncStatus {
+	return gitops.InspectSync(cfg.VaultPath)
+}
 func HasRemote(cfg vault.LocalConfig) bool {
 	return cfg.VaultPath != "" && gitops.HasRemote(cfg.VaultPath, "origin")
 }

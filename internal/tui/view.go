@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
+	gitops "github.com/eaedave/gitenv/internal/git"
 )
 
 func (m model) View() string {
@@ -74,6 +75,8 @@ func (m model) renderScreen(width int) string {
 		return m.renderConfirmation("Remove sync repository?", "Remove vault sync repository? [y/N]", width)
 	case screenConfirmDisconnect:
 		return m.renderConfirmation("Disconnect vault?", "Disconnect this vault from this computer?\nEncrypted vault files and its remote will not be deleted. [y/N]", width)
+	case screenConfirmSync:
+		return m.renderSyncConfirmation(width)
 	default:
 		return ""
 	}
@@ -160,18 +163,19 @@ func (m model) renderUnlockMenu(width int) string {
 }
 
 func (m model) renderProjects(width int) string {
-	context := m.renderProjectContext()
+	workspace := m.renderProjectContext()
 	projectList := m.renderProjectList()
+	syncPanel := renderPanel("Sync", m.renderSyncStatus(), width, false)
 	if width >= compactViewWidth {
 		listWidth := max(28, width/3)
 		list := renderPanel("Projects", projectList, listWidth, true)
-		details := renderPanel("Workspace", context, width-listWidth-2, false)
-		context = lipgloss.JoinHorizontal(lipgloss.Top, list, "  ", details)
+		details := renderPanel("Workspace", workspace, width-listWidth-2, false)
+		workspace = lipgloss.JoinHorizontal(lipgloss.Top, list, "  ", details)
 	} else {
-		context = lipgloss.JoinVertical(lipgloss.Left, renderPanel("Workspace", context, width, false), "", renderPanel("Projects", projectList, width, true))
+		workspace = lipgloss.JoinVertical(lipgloss.Left, renderPanel("Workspace", workspace, width, false), "", renderPanel("Projects", projectList, width, true))
 	}
-	help := renderHelp("enter", "profiles", "a", "add", "c", "capture", "p/u", "pull/push", "g", "sync", "b", "recovery", "r", "reload", "q", "quit")
-	return lipgloss.JoinVertical(lipgloss.Left, context, "", help)
+	help := renderHelp("enter", "profiles", "s", "sync", "c", "capture", "a", "add", "g", "remote", "r", "reload", "q", "quit")
+	return lipgloss.JoinVertical(lipgloss.Left, workspace, "", syncPanel, "", help)
 }
 
 func (m model) renderProjectContext() string {
@@ -217,8 +221,9 @@ func (m model) renderProfiles(width int) string {
 	} else {
 		profiles = lipgloss.JoinVertical(lipgloss.Left, renderPanel(m.selectedProject, details, width, false), "", renderPanel("Profiles", profiles, width, true))
 	}
-	help := renderHelp("enter", "apply", "c", "capture active", "n", "new", "d", "remove", "esc", "back")
-	return lipgloss.JoinVertical(lipgloss.Left, profiles, "", help)
+	syncPanel := renderPanel("Sync", m.renderSyncStatus(), width, false)
+	help := renderHelp("enter", "apply", "s", "sync", "c", "capture", "n", "new", "d", "remove", "esc", "back")
+	return lipgloss.JoinVertical(lipgloss.Left, profiles, "", syncPanel, "", help)
 }
 
 func (m model) renderProfileList(activeProfile string) string {
@@ -238,6 +243,57 @@ func (m model) renderProfileList(activeProfile string) string {
 		rows = append(rows, row)
 	}
 	return strings.Join(rows, "\n")
+}
+
+func (m model) renderSyncStatus() string {
+	statusText, recommendation := syncStatusText(m.syncStatus)
+	rows := []string{
+		labelValue("Remote", valueOrNone(m.remoteDisplayURL)),
+		styles.label.Render("Status  ") + statusText,
+	}
+	if !m.syncStatus.CheckedAt.IsZero() {
+		rows = append(rows, labelValue("Checked", m.syncStatus.CheckedAt.Local().Format("15:04:05")))
+	}
+	if m.syncStatus.Dirty {
+		rows = append(rows, styles.warning.Render("● unpublished vault changes"))
+	}
+	if recommendation != "" {
+		rows = append(rows, "", styles.label.Render("Recommended  ")+styles.value.Render(recommendation))
+	}
+	return strings.Join(rows, "\n")
+}
+
+func syncStatusText(status gitops.SyncStatus) (string, string) {
+	switch status.State {
+	case gitops.SyncChecking:
+		return styles.warning.Render("◌ checking…"), "Wait for remote check"
+	case gitops.SyncSynced:
+		return styles.success.Render("● synchronized"), ""
+	case gitops.SyncLocalAhead:
+		return styles.warning.Render(fmt.Sprintf("↑ %d local update(s)", max(1, status.Ahead))), "Press s to publish"
+	case gitops.SyncRemoteAhead:
+		return styles.warning.Render(fmt.Sprintf("↓ %d remote update(s)", status.Behind)), "Press s to download"
+	case gitops.SyncDiverged:
+		return styles.danger.Render(fmt.Sprintf("↕ diverged (%d local, %d remote)", status.Ahead, status.Behind)), "Resolve divergence before syncing"
+	case gitops.SyncNoRemote:
+		return styles.muted.Render("○ not configured"), "Press g to configure sync"
+	case gitops.SyncOffline:
+		return styles.warning.Render("○ offline"), "Check connection and press r"
+	case gitops.SyncAuthError:
+		return styles.danger.Render("● authentication failed"), "Verify Git credentials and press r"
+	default:
+		return styles.danger.Render("● check failed"), "Press r to retry"
+	}
+}
+
+func (m model) renderSyncConfirmation(width int) string {
+	action := "Publish local vault changes?"
+	detail := "Encrypted vault changes will be published.\nLocal .env files will not be modified. [y/N]"
+	if m.pendingSync == gitops.SyncRemoteAhead {
+		action = "Download remote vault updates?"
+		detail = "Encrypted vault updates will be downloaded.\nLocal .env files will not be modified. [y/N]"
+	}
+	return m.renderConfirmation(action, detail, width)
 }
 
 func (m model) renderConfirmation(title, message string, width int) string {
