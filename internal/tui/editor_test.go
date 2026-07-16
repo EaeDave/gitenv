@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/eaedave/gitenv/internal/vault"
@@ -20,6 +21,40 @@ func editorModelForEnv(t *testing.T, content []byte) (model, string) {
 	}
 	cfg := vault.LocalConfig{Projects: map[string]vault.LocalProject{"api": {Path: dir}}}
 	return model{cfg: &cfg, screen: screenProfiles, selectedProject: "api", width: 80, height: 24}, dir
+}
+
+func editorWithBase(base, buffer string, trailing bool) model {
+	editor := textarea.New()
+	editor.CharLimit = 0
+	editor.SetValue(buffer)
+	return model{
+		width:                 80,
+		height:                24,
+		screen:                screenEditor,
+		editor:                editor,
+		editorProject:         "millennium-api-docs",
+		editorTrailingNewline: trailing,
+		editorBase:            []byte(base),
+		editorBaseProfile:     "prod",
+		editorBaseAvailable:   true,
+	}
+}
+
+func TestEditorRendersGitStyleDiffAgainstCapturedProfile(t *testing.T) {
+	base := "DATABASE_URL=postgres://x\nAPP_AUTH_USER=bakihanma\n"
+	m := editorWithBase(base, "DATABASE_URL=postgres://x\nAPP_AUTH_USER=bakihanma\ntest", false)
+	view := m.renderEditor(80)
+	if !strings.Contains(view, "Diff vs prod (captured)") {
+		t.Fatalf("editor diff missing baseline title:\n%s", view)
+	}
+	if !strings.Contains(view, `"test"`) || !strings.Contains(view, "+") {
+		t.Fatalf("added local line not shown as a diff addition:\n%s", view)
+	}
+
+	clean := editorWithBase(base, "DATABASE_URL=postgres://x\nAPP_AUTH_USER=bakihanma", false)
+	if view := clean.renderEditor(80); !strings.Contains(view, "matches the captured profile") {
+		t.Fatalf("unchanged buffer should report a clean match:\n%s", view)
+	}
 }
 
 func openEditorModel(t *testing.T, content []byte) (model, string) {
@@ -101,17 +136,14 @@ func typeIntoEditor(m model, text string) model {
 	return m
 }
 
-func TestEditorShowsLiveDiffAndSavesWithFidelity(t *testing.T) {
+func TestEditorSavesEditsWithFidelity(t *testing.T) {
 	m, dir := openEditorModel(t, []byte("API_KEY=old\r\n"))
 	m = typeIntoEditor(m, "NEW=1")
 	if !m.editorDirty() {
 		t.Fatal("edited buffer not reported dirty")
 	}
-	view := m.renderEditor(80)
-	for _, expected := range []string{"Pending changes", "+ NEW"} {
-		if !strings.Contains(view, expected) {
-			t.Fatalf("live diff missing %q:\n%s", expected, view)
-		}
+	if view := m.renderEditor(80); !strings.Contains(view, "no captured profile") {
+		t.Fatalf("editor without a captured baseline should say so:\n%s", view)
 	}
 
 	saved, cmd := m.editorKey(tea.KeyMsg{Type: tea.KeyCtrlS})

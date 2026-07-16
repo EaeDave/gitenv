@@ -97,40 +97,41 @@ type capturePreviewMsg struct {
 }
 
 type model struct {
-	cfg                                                   *vault.LocalConfig
-	cwd                                                   string
-	current                                               app.CurrentProject
-	manifest                                              vault.Manifest
-	statuses                                              map[string]string
-	profileStatuses                                       map[string]map[string]string
-	projects, profiles                                    []string
-	projectCursor, profileCursor, menuCursor, fieldCursor int
-	selectedProject, pendingProfile, pendingProject       string
-	pendingSync                                           gitops.SyncState
-	pendingCapture                                        captureIntent
-	captureDiff                                           envdiff.Diff
-	screen                                                screen
-	fields                                                []field
-	info, errText                                         string
-	busy                                                  bool
-	remoteURL                                             string // safe prefill URL (no embedded credentials)
-	remoteDisplayURL                                      string // redacted display URL
-	accessRequired                                        bool
-	migrationRecoveryRequired                             bool
-	syncStatus                                            gitops.SyncStatus
-	syncInventory                                         app.SyncInventory
-	syncDiffOffset                                        int
-	syncLineDiff                                          *app.SyncLineDiff
-	syncDiffLoading                                       bool
-	width, height                                         int
-	syncDiffSelection                                     int
-	pendingDiffProject, pendingDiffProfile                string
-	spinner                                               spinner.Model
-	editor                                                textarea.Model
-	editorProject                                         string
-	editorRaw                                             []byte
-	editorCRLF, editorTrailingNewline                     bool
-	editorReturn                                          screen
+	cfg                                                    *vault.LocalConfig
+	cwd                                                    string
+	current                                                app.CurrentProject
+	manifest                                               vault.Manifest
+	statuses                                               map[string]string
+	profileStatuses                                        map[string]map[string]string
+	projects, profiles                                     []string
+	projectCursor, profileCursor, menuCursor, fieldCursor  int
+	selectedProject, pendingProfile, pendingProject        string
+	pendingSync                                            gitops.SyncState
+	pendingCapture                                         captureIntent
+	captureDiff                                            envdiff.Diff
+	screen                                                 screen
+	fields                                                 []field
+	info, errText                                          string
+	busy                                                   bool
+	remoteURL                                              string // safe prefill URL (no embedded credentials)
+	remoteDisplayURL                                       string // redacted display URL
+	accessRequired                                         bool
+	migrationRecoveryRequired                              bool
+	syncStatus                                             gitops.SyncStatus
+	syncInventory                                          app.SyncInventory
+	syncDiffOffset                                         int
+	syncLineDiff                                           *app.SyncLineDiff
+	syncDiffLoading                                        bool
+	width, height                                          int
+	syncDiffSelection                                      int
+	pendingDiffProject, pendingDiffProfile                 string
+	spinner                                                spinner.Model
+	editor                                                 textarea.Model
+	editorRaw                                              []byte
+	editorBase                                             []byte
+	editorProject, editorBaseProfile                       string
+	editorCRLF, editorTrailingNewline, editorBaseAvailable bool
+	editorReturn                                           screen
 }
 
 func newModel(cfg *vault.LocalConfig, cwd string) model {

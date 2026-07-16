@@ -74,6 +74,15 @@ func (m model) openEditor(project string, back screen) (tea.Model, tea.Cmd) {
 	m.editorCRLF = crlf
 	m.editorTrailingNewline = trailing
 	m.editorReturn = back
+	if base, profile, ok, baseErr := app.ReadActiveProfileEnv(*m.cfg, project); baseErr == nil {
+		m.editorBase = base
+		m.editorBaseProfile = profile
+		m.editorBaseAvailable = ok
+	} else {
+		m.editorBase = nil
+		m.editorBaseProfile = profile
+		m.editorBaseAvailable = false
+	}
 	m.screen = screenEditor
 	m = m.applyEditorSize()
 	return m, textarea.Blink
@@ -161,6 +170,9 @@ func (m *model) clearEditor() {
 	m.editor = textarea.Model{}
 	m.editorProject = ""
 	m.editorRaw = nil
+	m.editorBase = nil
+	m.editorBaseProfile = ""
+	m.editorBaseAvailable = false
 	m.editorCRLF = false
 	m.editorTrailingNewline = false
 	m.editorReturn = screenProjects

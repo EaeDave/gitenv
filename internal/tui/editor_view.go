@@ -1,8 +1,6 @@
 package tui
 
 import (
-	"fmt"
-
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/eaedave/gitenv/internal/envdiff"
@@ -18,19 +16,13 @@ func (m model) renderEditor(width int) string {
 }
 
 func (m model) renderEditorDiff() string {
-	diff := envdiff.Compare(m.editorRaw, m.editorBytes())
-	if diff.Empty() {
-		return styles.muted.Render("no changes yet")
+	if !m.editorBaseAvailable {
+		return styles.muted.Render("new .env — no captured profile to compare against")
 	}
-	lines := []string{styles.label.Render("Pending changes")}
-	for _, change := range diff.Changes {
-		lines = append(lines, "  "+renderCaptureChange(change))
+	title := styles.label.Render("Diff vs " + m.editorBaseProfile + " (captured)")
+	changes := renderLiteralLineChanges(envdiff.CompareLines(m.editorBase, m.editorBytes()))
+	if len(changes) == 0 {
+		return title + "\n" + styles.success.Render("  local .env matches the captured profile")
 	}
-	if diff.CommentChanges > 0 {
-		lines = append(lines, styles.muted.Render(fmt.Sprintf("  • %d comment change(s)", diff.CommentChanges)))
-	}
-	if diff.UnknownChanges > 0 {
-		lines = append(lines, styles.warning.Render(fmt.Sprintf("  ! %d unrecognized line change(s)", diff.UnknownChanges)))
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return lipgloss.JoinVertical(lipgloss.Left, append([]string{title}, changes...)...)
 }
