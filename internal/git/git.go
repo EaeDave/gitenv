@@ -160,6 +160,16 @@ func runWithTimeout(dir string, timeout time.Duration, args ...string) (string, 
 }
 
 func commandError(err error, stdout, stderr string) error {
+	if errors.Is(err, exec.ErrNotFound) {
+		return errors.New("git was not found; install Git from https://git-scm.com and make sure it is on your PATH, then reopen gitenv")
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		// git could not be started at all (bad PATH entry, corrupt install,
+		// or an argument the OS rejected). Surface it as a start failure
+		// rather than a cryptic "fork/exec … invalid argument".
+		return fmt.Errorf("could not start git; check that Git is installed correctly: %w", err)
+	}
 	detail := strings.TrimSpace(stderr)
 	if detail == "" {
 		detail = strings.TrimSpace(stdout)

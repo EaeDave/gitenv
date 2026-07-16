@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -115,8 +116,8 @@ func (m model) formKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+u":
 		m.fields[m.fieldCursor].value = ""
 	default:
-		if len(key.Runes) > 0 {
-			m.fields[m.fieldCursor].value += string(key.Runes)
+		if text := sanitizeInput(string(key.Runes)); text != "" {
+			m.fields[m.fieldCursor].value += text
 		}
 	}
 	return m, nil
@@ -155,10 +156,23 @@ func (m *model) deleteLastFieldRune() {
 	m.fields[m.fieldCursor].value = value[:len(value)-size]
 }
 
+// sanitizeInput drops control and non-printable runes (including the NUL bytes
+// the Windows console can inject on some keystrokes/pastes) so they never reach
+// a git argument, where they would make the OS reject the process with
+// "invalid argument".
+func sanitizeInput(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == utf8.RuneError || !unicode.IsPrint(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
 func (m model) submitForm() (tea.Model, tea.Cmd) {
 	values := make([]string, len(m.fields))
 	for index := range m.fields {
-		values[index] = strings.TrimSpace(m.fields[index].value)
+		values[index] = strings.TrimSpace(sanitizeInput(m.fields[index].value))
 	}
 	m.busy = true
 	return m.submitFormValues(values)

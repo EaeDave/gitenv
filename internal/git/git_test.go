@@ -171,3 +171,25 @@ func TestCommitAndPushRequiresMessage(t *testing.T) {
 		t.Fatalf("CommitAndPush() error = %v", err)
 	}
 }
+
+func TestCommandErrorClassifiesFailures(t *testing.T) {
+	notFound := commandError(exec.ErrNotFound, "", "")
+	if !strings.Contains(notFound.Error(), "git was not found") {
+		t.Fatalf("not-found error = %q", notFound)
+	}
+
+	startFail := commandError(errors.New("fork/exec: invalid argument"), "", "")
+	if !strings.Contains(startFail.Error(), "could not start git") {
+		t.Fatalf("start-failure error = %q", startFail)
+	}
+
+	// A real non-zero git exit must surface git's stderr, not a start message.
+	exitErr := exec.Command("git", "definitely-not-a-real-subcommand").Run()
+	if _, ok := exitErr.(*exec.ExitError); !ok {
+		t.Skipf("expected an ExitError from git, got %T", exitErr)
+	}
+	classified := commandError(exitErr, "", "fatal: bad usage")
+	if !strings.Contains(classified.Error(), "fatal: bad usage") || strings.Contains(classified.Error(), "could not start git") {
+		t.Fatalf("exit error = %q", classified)
+	}
+}
