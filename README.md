@@ -51,7 +51,7 @@ No primeiro uso, a TUI guia todo o processo:
 4. detectar o projeto e `.env` atuais;
 5. cadastrar o projeto e capturar o perfil inicial.
 
-Depois, a tela principal permite aplicar/capturar perfis, criar perfis, executar pull/push, configurar remoto e exportar novo backup da recovery identity.
+Depois, a tela principal permite aplicar/capturar/criar/remover perfis, executar pull/push, configurar remoto e exportar novo backup da recovery identity.
 
 Atalhos principais:
 
@@ -60,6 +60,7 @@ enter  abrir projeto ou aplicar perfil
 a      adicionar projeto atual
 c      capturar perfil ativo
 n      criar perfil (dentro do projeto)
+d      remover perfil inativo (dentro do projeto)
 p      pull do vault
 u      push do vault
 g      configurar remoto Git
