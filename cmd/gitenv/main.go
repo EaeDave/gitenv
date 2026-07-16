@@ -13,6 +13,9 @@ import (
 	"github.com/eaedave/gitenv/internal/vault"
 )
 
+// version is overridden at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "gitenv:", err)
@@ -51,7 +54,7 @@ func run(args []string) error {
 		usage()
 		return nil
 	case "version", "--version":
-		fmt.Println("gitenv dev")
+		fmt.Println("gitenv " + version)
 		return nil
 	default:
 		usage()

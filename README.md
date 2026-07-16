@@ -35,6 +35,22 @@
 - Git instalado e autenticado para o remoto escolhido.
 - Go 1.24+ somente para compilar do código-fonte.
 
+### Instalar
+
+Linux e macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/EaeDave/gitenv/main/install.sh | bash
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/EaeDave/gitenv/main/install.ps1 | iex
+```
+
+Os instaladores detectam SO e arquitetura, baixam o binário estático correspondente da release mais recente no GitHub, verificam o checksum SHA-256 e instalam em `~/.local/bin` (Linux/macOS) ou `%LOCALAPPDATA%\gitenv\bin` (Windows). Defina `GITENV_VERSION` para fixar uma versão e `GITENV_INSTALL_DIR` para trocar o destino.
+
 ### Compilar
 
 ```bash
