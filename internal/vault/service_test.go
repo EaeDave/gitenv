@@ -57,6 +57,55 @@ func TestCaptureApplyPreservesBytesAndProtectsChanges(t *testing.T) {
 	}
 }
 
+func TestReadProfileVerifiesChecksum(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("GITENV_CONFIG_DIR", filepath.Join(root, "config"))
+	identity, err := GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveIdentity(identity); err != nil {
+		t.Fatal(err)
+	}
+	vaultDir, projectDir := filepath.Join(root, "vault"), filepath.Join(root, "project")
+	if err := Init(vaultDir, identity.Recipient().String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("SECRET=preserved\r\n")
+	if err := os.WriteFile(filepath.Join(projectDir, ".env"), original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := LocalConfig{VaultPath: vaultDir, Projects: map[string]LocalProject{}}
+	if err := Link(&cfg, "api", projectDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := Capture(&cfg, "api", "dev"); err != nil {
+		t.Fatal(err)
+	}
+	plaintext, err := ReadProfile(&cfg, "api", "dev")
+	if err != nil || string(plaintext) != string(original) {
+		t.Fatalf("authenticated profile read failed: plaintext=%q err=%v", plaintext, err)
+	}
+	manifest, err := LoadManifest(vaultDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := manifest.Projects["api"].Profiles["dev"]
+	profile.Checksum = Checksum([]byte("different"))
+	project := manifest.Projects["api"]
+	project.Profiles["dev"] = profile
+	manifest.Projects["api"] = project
+	if err := SaveManifest(vaultDir, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadProfile(&cfg, "api", "dev"); err == nil {
+		t.Fatal("profile with mismatched checksum was accepted")
+	}
+}
+
 func TestRemoveProfileRejectsActiveAndRemovesInactive(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("GITENV_CONFIG_DIR", filepath.Join(root, "config"))

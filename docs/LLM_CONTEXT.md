@@ -5,12 +5,12 @@
 
 ## Current business rule map
 
-- Encrypted profile lifecycle and byte preservation → `internal/vault/service.go`, `internal/vault/service_test.go`.
+- Encrypted profile lifecycle, authenticated reads and byte preservation → `internal/vault/service.go`, `internal/vault/service_test.go`; value-free structural env comparison → `internal/envdiff/envdiff.go`, `internal/envdiff/envdiff_test.go`.
 - Protected access, migration and identity selection → `internal/vault/access.go`, `internal/vault/crypto.go`, `internal/app/roadmap_test.go`.
 - Device enrollment and recovery → `internal/vault/enrollment.go`, `internal/app/device.go`, `internal/vault/enrollment_test.go`.
 - Vault remote management and repository identity → `internal/app/remote.go`, `internal/git/normalize.go`, focused tests beside them.
-- Non-mutating remote inspection and sync state classification → `internal/git/sync.go`, `internal/git/sync_test.go`.
-- TUI access gates and sync workflows → `internal/tui/tui.go`, `internal/tui/keys.go`, `internal/tui/sync.go`; responsive rendering and visual contracts → `internal/tui/view.go`, `internal/tui/theme.go`, `internal/tui/tui_test.go`.
+- Non-mutating Git snapshot inspection and sync inventory → `internal/git/sync.go`, `internal/git/revision.go`, `internal/app/sync_inventory.go`, focused tests beside them; value-free vault snapshot comparison → `internal/vault/diff.go`, `internal/vault/diff_test.go`.
+- TUI access gates, automatic sync inventory and capture-preview workflows → `internal/tui/tui.go`, `internal/tui/keys.go`, `internal/tui/sync.go`, `internal/tui/sync_inventory_view.go`, `internal/tui/capture.go`; responsive rendering and visual contracts → `internal/tui/view.go`, `internal/tui/capture_view.go`, `internal/tui/theme.go`, `internal/tui/tui_test.go`.
 
 ## Non-inferable technical facts
 

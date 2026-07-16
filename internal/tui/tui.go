@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/eaedave/gitenv/internal/app"
+	"github.com/eaedave/gitenv/internal/envdiff"
 	gitops "github.com/eaedave/gitenv/internal/git"
 	"github.com/eaedave/gitenv/internal/vault"
 )
@@ -39,6 +40,7 @@ const (
 	screenConfirm
 	screenConfirmDelete
 	screenConfirmSync
+	screenConfirmCapture
 )
 
 type field struct {
@@ -64,7 +66,24 @@ type reloadMsg struct {
 }
 
 type syncStatusMsg struct {
-	status gitops.SyncStatus
+	status    gitops.SyncStatus
+	inventory app.SyncInventory
+}
+
+type captureIntent int
+
+const (
+	captureExistingProfile captureIntent = iota
+	captureNewProfile
+	captureNewProject
+)
+
+type capturePreviewMsg struct {
+	diff    envdiff.Diff
+	project string
+	profile string
+	intent  captureIntent
+	err     error
 }
 
 type model struct {
@@ -75,8 +94,10 @@ type model struct {
 	statuses                                              map[string]string
 	projects, profiles                                    []string
 	projectCursor, profileCursor, menuCursor, fieldCursor int
-	selectedProject, pendingProfile                       string
+	selectedProject, pendingProfile, pendingProject       string
 	pendingSync                                           gitops.SyncState
+	pendingCapture                                        captureIntent
+	captureDiff                                           envdiff.Diff
 	screen                                                screen
 	fields                                                []field
 	info, errText                                         string
@@ -86,6 +107,7 @@ type model struct {
 	accessRequired                                        bool
 	migrationRecoveryRequired                             bool
 	syncStatus                                            gitops.SyncStatus
+	syncInventory                                         app.SyncInventory
 	width, height                                         int
 	spinner                                               spinner.Model
 }
@@ -176,7 +198,8 @@ func loadCmd(cfg *vault.LocalConfig, cwd string) tea.Cmd {
 
 func inspectSyncCmd(cfg *vault.LocalConfig) tea.Cmd {
 	return func() tea.Msg {
-		return syncStatusMsg{status: app.InspectSync(*cfg)}
+		status, inventory := app.InspectSyncWithInventory(*cfg)
+		return syncStatusMsg{status: status, inventory: inventory}
 	}
 }
 
@@ -202,7 +225,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case syncStatusMsg:
-		m.syncStatus = msg.status
+		m.syncStatus, m.syncInventory = msg.status, msg.inventory
+		return m, nil
+
+	case capturePreviewMsg:
+		m.busy = false
+		if msg.err != nil {
+			m.errText = safeError(msg.err)
+			return m, nil
+		}
+		m.captureDiff = msg.diff
+		m.pendingProject = msg.project
+		m.pendingProfile = msg.profile
+		m.pendingCapture = msg.intent
+		m.fields = nil
+		m.screen = screenConfirmCapture
 		return m, nil
 
 	case reloadMsg:

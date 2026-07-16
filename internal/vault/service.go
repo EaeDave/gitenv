@@ -105,10 +105,6 @@ func Apply(cfg *LocalConfig, project, profile string, force bool) error {
 	if !ok {
 		return fmt.Errorf("project %q does not exist in vault", project)
 	}
-	profileEntry, ok := projectEntry.Profiles[profile]
-	if !ok {
-		return fmt.Errorf("profile %q does not exist for project %q", profile, project)
-	}
 	target := filepath.Join(local.Path, ".env")
 	if existing, readErr := os.ReadFile(target); readErr == nil && !force {
 		if local.ActiveProfile == "" {
@@ -121,20 +117,9 @@ func Apply(cfg *LocalConfig, project, profile string, force bool) error {
 	} else if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		return readErr
 	}
-	ciphertext, err := os.ReadFile(ProfilePath(cfg.VaultPath, project, profile))
+	plaintext, err := ReadProfile(cfg, project, profile)
 	if err != nil {
 		return err
-	}
-	identity, err := LoadIdentity()
-	if err != nil {
-		return err
-	}
-	plaintext, err := Decrypt(ciphertext, identity)
-	if err != nil {
-		return fmt.Errorf("decrypt profile: %w", err)
-	}
-	if Checksum(plaintext) != profileEntry.Checksum {
-		return errors.New("decrypted profile checksum mismatch")
 	}
 	if err := WriteAtomic(target, plaintext, 0o600); err != nil {
 		return err
@@ -142,6 +127,39 @@ func Apply(cfg *LocalConfig, project, profile string, force bool) error {
 	local.ActiveProfile = profile
 	cfg.Projects[project] = local
 	return SaveLocal(*cfg)
+}
+
+// ReadProfile decrypts a profile and verifies its manifest checksum before
+// returning plaintext to an explicit in-memory operation such as apply or preview.
+func ReadProfile(cfg *LocalConfig, project, profile string) ([]byte, error) {
+	manifest, err := LoadManifest(cfg.VaultPath)
+	if err != nil {
+		return nil, err
+	}
+	projectEntry, ok := manifest.Projects[project]
+	if !ok {
+		return nil, fmt.Errorf("project %q does not exist in vault", project)
+	}
+	profileEntry, ok := projectEntry.Profiles[profile]
+	if !ok {
+		return nil, fmt.Errorf("profile %q does not exist for project %q", profile, project)
+	}
+	ciphertext, err := os.ReadFile(ProfilePath(cfg.VaultPath, project, profile))
+	if err != nil {
+		return nil, fmt.Errorf("read encrypted profile: %w", err)
+	}
+	identity, err := LoadIdentity()
+	if err != nil {
+		return nil, err
+	}
+	plaintext, err := Decrypt(ciphertext, identity)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt profile: %w", err)
+	}
+	if Checksum(plaintext) != profileEntry.Checksum {
+		return nil, errors.New("decrypted profile checksum mismatch")
+	}
+	return plaintext, nil
 }
 
 func RemoveProfile(cfg *LocalConfig, project, profile string) error {

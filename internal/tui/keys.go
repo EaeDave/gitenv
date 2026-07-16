@@ -42,6 +42,8 @@ func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.confirmDeleteKey(key)
 	case screenConfirmSync:
 		return m.confirmSyncKey(key)
+	case screenConfirmCapture:
+		return m.confirmCaptureKey(key)
 	}
 	return m, nil
 }
@@ -157,8 +159,8 @@ func (m model) submitFormValues(values []string) (tea.Model, tea.Cmd) {
 	case screenAddProject:
 		return m.submitProject(values[0], values[1])
 	case screenNewProfile:
-		project := m.selectedProject
-		return m, opCmd(func() error { return vault.Capture(m.cfg, project, values[0]) }, "new profile captured")
+		m.busy = false
+		return m.requestCapturePreview(m.selectedProject, values[0], captureNewProfile)
 	case screenRemoteChange:
 		cfg := *m.cfg
 		return m, opCmd(func() error { return app.ConfigureVaultRemote(cfg, values[0]) }, "vault sync repository configured")
@@ -187,9 +189,8 @@ func (m model) submitProject(projectName, profileName string) (tea.Model, tea.Cm
 			return app.LinkExistingProject(m.cfg, m.current, projectName, profileName)
 		}, "existing project linked and profile applied")
 	}
-	return m, opCmd(func() error {
-		return app.AddCurrentProject(m.cfg, m.current, projectName, profileName)
-	}, "new project added and .env captured")
+	m.busy = false
+	return m.requestCapturePreview(projectName, profileName, captureNewProject)
 }
 
 func (m model) submitEnrollment(deviceName string) (tea.Model, tea.Cmd) {
@@ -280,8 +281,7 @@ func (m model) captureSelectedProject() (tea.Model, tea.Cmd) {
 		m.errText = "project has no active profile"
 		return m, nil
 	}
-	m.busy = true
-	return m, opCmd(func() error { return vault.Capture(m.cfg, project, active) }, "profile captured")
+	return m.requestCapturePreview(project, active, captureExistingProfile)
 }
 
 func (m model) syncVault(push bool) (tea.Model, tea.Cmd) {
@@ -419,9 +419,7 @@ func (m model) captureActiveProfile() (tea.Model, tea.Cmd) {
 		m.errText = "project has no active profile"
 		return m, nil
 	}
-	project := m.selectedProject
-	m.busy = true
-	return m, opCmd(func() error { return vault.Capture(m.cfg, project, active) }, "profile captured")
+	return m.requestCapturePreview(m.selectedProject, active, captureExistingProfile)
 }
 
 func (m *model) requestProfileRemoval() {

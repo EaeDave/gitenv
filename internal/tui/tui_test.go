@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/eaedave/gitenv/internal/app"
+	"github.com/eaedave/gitenv/internal/envdiff"
 	gitops "github.com/eaedave/gitenv/internal/git"
 	"github.com/eaedave/gitenv/internal/vault"
 )
@@ -54,11 +55,22 @@ func TestOnboardingAndContextualAddFlow(t *testing.T) {
 	if m.screen != screenAddProject || m.fields[0].value != "my-api" || m.fields[1].value != "dev" {
 		t.Fatalf("add wizard defaults wrong: %#v", m.fields)
 	}
-	_, cmd = m.submitForm()
+	next, cmd = m.submitForm()
+	preview := cmd().(capturePreviewMsg)
+	if preview.err != nil {
+		t.Fatal(preview.err)
+	}
+	next, _ = next.(model).Update(preview)
+	m = next.(model)
+	if m.screen != screenConfirmCapture {
+		t.Fatalf("capture preview not opened: screen=%v", m.screen)
+	}
+	next, cmd = m.confirmCaptureKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	msg = cmd()
 	if result := msg.(operationMsg); result.err != nil {
 		t.Fatal(result.err)
 	}
+	m = next.(model)
 	if cfg.Projects["my-api"].ActiveProfile != "dev" {
 		t.Fatalf("project not captured: %#v", cfg.Projects)
 	}
@@ -568,6 +580,203 @@ func TestContextualSyncBlocksUnsafeStates(t *testing.T) {
 		if cmd != nil || got.screen != screenProjects || got.errText == "" {
 			t.Fatalf("unsafe state %q was not blocked: %#v cmd=%v", state, got, cmd)
 		}
+	}
+}
+
+func TestNewProfileRequiresPreviewAndCancellationCreatesNothing(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("GITENV_CONFIG_DIR", filepath.Join(root, "config"))
+	identity, err := vault.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.SaveIdentity(identity); err != nil {
+		t.Fatal(err)
+	}
+	vaultDir, projectDir := filepath.Join(root, "vault"), filepath.Join(root, "project")
+	if err := vault.Init(vaultDir, identity.Recipient().String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, ".env"), []byte("TOKEN=secret-value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := vault.LocalConfig{VaultPath: vaultDir, Projects: map[string]vault.LocalProject{}}
+	if err := vault.Link(&cfg, "api", projectDir); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := vault.LoadManifest(vaultDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := model{cfg: &cfg, manifest: manifest, screen: screenNewProfile, selectedProject: "api", fields: []field{{"New profile name", "prod", false}}}
+	next, cmd := m.submitForm()
+	preview := cmd().(capturePreviewMsg)
+	if preview.err != nil {
+		t.Fatal(preview.err)
+	}
+	next, _ = next.(model).Update(preview)
+	m = next.(model)
+	if m.screen != screenConfirmCapture || strings.Contains(m.View(), "secret-value") {
+		t.Fatalf("new profile preview unsafe or missing:\n%s", m.View())
+	}
+	cancelled, cancelCmd := m.confirmCaptureKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if cancelCmd != nil || cancelled.(model).screen != screenProfiles {
+		t.Fatalf("new profile cancellation failed: %#v", cancelled)
+	}
+	manifest, err = vault.LoadManifest(vaultDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := manifest.Projects["api"].Profiles["prod"]; exists {
+		t.Fatal("cancelled new profile preview created a profile")
+	}
+}
+
+func TestCapturePreviewHidesValuesAndWritesOnlyAfterConfirmation(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("GITENV_CONFIG_DIR", filepath.Join(root, "config"))
+	identity, err := vault.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.SaveIdentity(identity); err != nil {
+		t.Fatal(err)
+	}
+	vaultDir, projectDir := filepath.Join(root, "vault"), filepath.Join(root, "project")
+	if err := vault.Init(vaultDir, identity.Recipient().String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	base := []byte("API_KEY=old-secret\n# DEBUG=true\nREMOVED=retired-token-9381\n")
+	if err := os.WriteFile(filepath.Join(projectDir, ".env"), base, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := vault.LocalConfig{VaultPath: vaultDir, Projects: map[string]vault.LocalProject{}}
+	if err := vault.Link(&cfg, "api", projectDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.Capture(&cfg, "api", "dev"); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := vault.LoadManifest(vaultDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := manifest.Projects["api"].Profiles["dev"].Checksum
+	current := []byte("API_KEY=new-secret\nDEBUG=true\nADDED=private\n")
+	if err := os.WriteFile(filepath.Join(projectDir, ".env"), current, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := model{cfg: &cfg, screen: screenProfiles, selectedProject: "api", manifest: manifest}
+	next, cmd := m.requestCapturePreview("api", "dev", captureExistingProfile)
+	if !next.(model).busy || cmd == nil {
+		t.Fatal("capture preview did not start asynchronously")
+	}
+	preview := cmd().(capturePreviewMsg)
+	if preview.err != nil {
+		t.Fatal(preview.err)
+	}
+	updated, _ := next.(model).Update(preview)
+	m = updated.(model)
+	view := m.View()
+	for _, key := range []string{"API_KEY", "DEBUG", "ADDED", "REMOVED", "Values are hidden"} {
+		if !strings.Contains(view, key) {
+			t.Fatalf("capture preview missing %q:\n%s", key, view)
+		}
+	}
+	for _, secret := range []string{"old-secret", "new-secret", "private", "retired-token-9381"} {
+		if strings.Contains(view, secret) {
+			t.Fatalf("capture preview exposed secret %q:\n%s", secret, view)
+		}
+	}
+	cancelled, cancelCmd := m.confirmCaptureKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if cancelCmd != nil || cancelled.(model).screen != screenProfiles {
+		t.Fatalf("capture cancellation failed: %#v", cancelled)
+	}
+	manifest, err = vault.LoadManifest(vaultDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := manifest.Projects["api"].Profiles["dev"].Checksum; got != before {
+		t.Fatalf("cancelled preview changed profile checksum: %q", got)
+	}
+	m = updated.(model)
+	confirmed, captureCmd := m.confirmCaptureKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if !confirmed.(model).busy || captureCmd == nil {
+		t.Fatal("capture confirmation did not start capture")
+	}
+	result := captureCmd().(operationMsg)
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	manifest, err = vault.LoadManifest(vaultDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := manifest.Projects["api"].Profiles["dev"].Checksum; got != vault.Checksum(current) {
+		t.Fatalf("confirmed capture checksum = %q", got)
+	}
+}
+func TestSyncPanelRendersAutomaticValueFreeInventory(t *testing.T) {
+	cfg := vault.LocalConfig{VaultPath: "/vault"}
+	m := model{
+		cfg:        &cfg,
+		screen:     screenProjects,
+		syncStatus: gitops.SyncStatus{State: gitops.SyncLocalAhead, Ahead: 1, Dirty: true},
+		syncInventory: app.SyncInventory{
+			Available: true,
+			Committed: vault.VaultDelta{Profiles: []vault.ProfileDelta{{
+				Project: "api", Profile: "prod", Kind: vault.ProfileChanged,
+				Diff: envdiff.Diff{Changes: []envdiff.Change{{Key: "DATABASE_URL", Kind: envdiff.Changed}}},
+			}}},
+			Uncommitted: vault.VaultDelta{Profiles: []vault.ProfileDelta{{
+				Project: "worker", Profile: "dev", Kind: vault.ProfileAdded,
+			}}},
+		},
+	}
+	view := m.View()
+	for _, expected := range []string{"Committed, not published", "api / prod", "DATABASE_URL", "Uncommitted vault changes", "+ worker / dev", "Values hidden"} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("automatic sync diff missing %q:\n%s", expected, view)
+		}
+	}
+	for _, secret := range []string{"postgres://production-secret", "token-value"} {
+		if strings.Contains(view, secret) {
+			t.Fatalf("automatic sync diff exposed %q:\n%s", secret, view)
+		}
+	}
+}
+
+func TestSyncPanelExplainsCommitWithoutVaultContentChanges(t *testing.T) {
+	cfg := vault.LocalConfig{VaultPath: "/vault"}
+	m := model{
+		cfg:           &cfg,
+		screen:        screenProjects,
+		syncStatus:    gitops.SyncStatus{State: gitops.SyncLocalAhead, Ahead: 1},
+		syncInventory: app.SyncInventory{Available: true},
+	}
+	view := m.View()
+	if !strings.Contains(view, "↑ 1 commit(s), no vault content changes") {
+		t.Fatalf("commit-only summary missing:\n%s", view)
+	}
+}
+
+func TestSyncPanelFailsClosedWhenInventoryUnavailable(t *testing.T) {
+	cfg := vault.LocalConfig{VaultPath: "/vault"}
+	m := model{
+		cfg:           &cfg,
+		screen:        screenProjects,
+		syncStatus:    gitops.SyncStatus{State: gitops.SyncLocalAhead, Dirty: true},
+		syncInventory: app.SyncInventory{Detail: "change details unavailable"},
+	}
+	view := m.View()
+	if !strings.Contains(view, "change details unavailable") || strings.Contains(view, "DATABASE_URL") {
+		t.Fatalf("unavailable inventory did not fail closed:\n%s", view)
 	}
 }
 

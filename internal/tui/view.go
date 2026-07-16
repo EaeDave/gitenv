@@ -77,6 +77,8 @@ func (m model) renderScreen(width int) string {
 		return m.renderConfirmation("Disconnect vault?", "Disconnect this vault from this computer?\nEncrypted vault files and its remote will not be deleted. [y/N]", width)
 	case screenConfirmSync:
 		return m.renderSyncConfirmation(width)
+	case screenConfirmCapture:
+		return m.renderCapturePreview(width)
 	default:
 		return ""
 	}
@@ -256,6 +258,9 @@ func (m model) renderSyncStatus() string {
 	}
 	if m.syncStatus.Dirty {
 		rows = append(rows, styles.warning.Render("● unpublished vault changes"))
+	}
+	if inventory := m.renderSyncInventory(); inventory != "" {
+		rows = append(rows, "", inventory)
 	}
 	if recommendation != "" {
 		rows = append(rows, "", styles.label.Render("Recommended  ")+styles.value.Render(recommendation))
