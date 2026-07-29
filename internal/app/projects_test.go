@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
 
+	gitops "github.com/eaedave/gitenv/internal/git"
 	"github.com/eaedave/gitenv/internal/vault"
 )
 
@@ -380,5 +382,85 @@ func TestCloneAndAdoptGuards(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(dest, "keep")); statErr != nil {
 		t.Fatalf("existing content was touched: %v", statErr)
+	}
+}
+
+// TestEnsureVaultUpgradedRefusesWhenRemoteIsAhead pins the guard that keeps two
+// computers from upgrading the same vault independently. The upgrade assigns
+// fresh random ids, so a second, separate upgrade produces a different layout of
+// identical content and the ff-only pull that follows cannot resolve it.
+func TestEnsureVaultUpgradedRefusesWhenRemoteIsAhead(t *testing.T) {
+	cfg, root := newVaultForRemote(t)
+	bare := filepath.Join(root, "remote.git")
+	initBareRepo(t, bare)
+	if err := ConfigureVaultRemote(cfg, bare); err != nil {
+		t.Fatal(err)
+	}
+	commitVault(t, cfg.VaultPath, "initial")
+	if err := gitops.Push(cfg.VaultPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// A peer publishes a commit this computer has not pulled.
+	peer := filepath.Join(root, "peer")
+	runGitIn(t, root, "clone", bare, peer)
+	if err := os.WriteFile(filepath.Join(peer, "peer.txt"), []byte("peer\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	commitVault(t, peer, "peer change")
+	runGitIn(t, peer, "push", "origin", "HEAD")
+
+	downgradeVaultToV2(t, cfg.VaultPath)
+
+	if _, err := EnsureVaultUpgraded(cfg); err == nil {
+		t.Fatal("EnsureVaultUpgraded must refuse while the vault remote is ahead")
+	}
+	if needed, err := vault.NeedsUpgrade(cfg.VaultPath); err != nil || !needed {
+		t.Fatalf("refused upgrade must leave the vault untouched: needed=%v err=%v", needed, err)
+	}
+}
+
+// TestEnsureVaultUpgradedProceedsWithoutRemote covers the other half of the
+// rule: the gate demands evidence of a conflict, so a vault with no remote (and
+// by extension an unreachable one) still upgrades. Blocking there would strand
+// every offline user for the sake of a rare race.
+func TestEnsureVaultUpgradedProceedsWithoutRemote(t *testing.T) {
+	cfg, _ := newVaultForRemote(t)
+	downgradeVaultToV2(t, cfg.VaultPath)
+
+	changed, err := EnsureVaultUpgraded(cfg)
+	if err != nil {
+		t.Fatalf("EnsureVaultUpgraded with no remote: %v", err)
+	}
+	if !changed {
+		t.Fatal("upgrade should have run")
+	}
+	if needed, err := vault.NeedsUpgrade(cfg.VaultPath); err != nil || needed {
+		t.Fatalf("vault still reports a pending upgrade: needed=%v err=%v", needed, err)
+	}
+}
+
+// downgradeVaultToV2 stamps the bootstrap file back to version 2 so the upgrade
+// path becomes pending again. The project layout is irrelevant here: these tests
+// exercise the gate, not the migration itself.
+func downgradeVaultToV2(t *testing.T, vaultPath string) {
+	t.Helper()
+	path := filepath.Join(vaultPath, "gitenv.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["version"] = 2
+	raw["projects"] = map[string]any{}
+	updated, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(updated, '\n'), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

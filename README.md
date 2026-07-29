@@ -16,6 +16,8 @@ GitHub/GitLab/Gitea/self-hosted remote.
 - 🖥️ **TUI-first** workflow to capture, apply, edit, and sync `.env` files.
 - 🗂️ **Multiple named profiles** per project (`dev`, `staging`, `prod`, …).
 - 🧬 **Byte-for-byte capture** — comments, disabled lines, ordering, and line endings are preserved.
+- 🖥️ **New computer, one keystroke** — the project list shows everything in the vault, clones or finds a missing repository, then links and applies its env file.
+- 🗺️ **Per-project env path** — `.env`, `.env.local`, or a monorepo path like `apps/web/.env`.
 - 🔍 **Value-free diff viewer** with opt-in literal reveal (`x`), scoped to the current project.
 - ✏️ **Built-in `.env` editor** with a live `git diff`-style view — no external editor required.
 - 🔑 **Recoverable access** — master password, recovery key, or approval from an enrolled device.
@@ -126,7 +128,11 @@ gitenv identity import <backup-file>
 gitenv device request <device-name>
 gitenv device approve <request-id>
 gitenv device activate <request-id>
-gitenv link <project> <project-directory>
+gitenv link <project> <project-directory> [--env-file <relative/path>] [--line-endings <preserve|native|lf|crlf>]
+gitenv set <project> --env-file <relative/path> | --line-endings <preserve|native|lf|crlf>
+gitenv projects
+gitenv adopt <project> [directory] [--profile <name>]
+gitenv discover
 gitenv capture <project> <profile>
 gitenv switch <project> <profile> [--force]
 gitenv status
@@ -151,11 +157,38 @@ gitenv version
   requires `--force`, the TUI requires explicit confirmation.
 - Diffs are **value-free by default**. Literal values are only decrypted on an
   explicit reveal, kept in memory, and dropped when you leave the view.
+- **Setting up a new computer**: install `gitenv`, clone the vault, import your
+  recovery identity. The project list then shows every project the vault holds,
+  badged by state — `●` linked, `◍` a clone found on this machine, `◌` missing,
+  `○` no repository recorded. Press `enter` on a missing project to clone it
+  (recorded URL, then `gh`, then HTTPS) and press `d` to scan for clones you
+  already have. Either way gitenv links the directory and applies the env file
+  in one step.
+- Clones are matched by their **origin remote**, never by folder name, so two
+  unrelated directories named `api` are never confused. The scan is bounded to
+  common development roots, skips build and cache trees, and is cached.
+
+### Upgrading from 0.2.x
+
+0.3.0 changes the vault layout: project metadata moves out of the plaintext
+manifest into per-project encrypted files. The first 0.3.0 launch upgrades an
+existing vault in place and leaves the change staged — publish it with `s` in the
+TUI or `gitenv push`.
+
+Do it on **one** computer, then `gitenv pull` on the others. The upgrade assigns
+fresh random identifiers, so two computers upgrading independently produce two
+different layouts of the same content; gitenv refuses to upgrade when it can see
+that the vault remote is ahead, and pulling first turns the upgrade into a no-op.
+Older gitenv binaries reject a 0.3.0 vault with a clear "unsupported vault
+version" message rather than misreading it.
 
 ## Security
 
 - Git stores only ciphertext, metadata, and wrapped key material — never plaintext secrets.
 - Losing **both** your master password and recovery key makes profiles cryptographically unrecoverable, by design.
+- The vault repository reveals no project names, profile names, repository URLs
+  or env paths: that metadata is encrypted per project under random identifiers,
+  so a reader of the repository learns only how many projects exist.
 - Keep your recovery key somewhere separate from the machine (password manager, offline copy).
 
 ## Development
@@ -228,6 +261,36 @@ sincronizar, revisar mudanças e editar o `.env` inline.
 - Um `.env` com mudanças não capturadas nunca é sobrescrito em silêncio.
 - Diffs são **sem valores por padrão** — o plaintext só é descriptografado sob
   demanda (`x`), fica em memória e é descartado ao sair da tela.
+- **Máquina nova ou formatada**: instale o `gitenv`, clone o vault e importe sua
+  recovery key. A lista passa a mostrar **todos** os projetos do vault, com
+  badge de estado — `●` vinculado, `◍` clone encontrado nesta máquina, `◌` sem
+  cópia local, `○` sem repositório registrado. `enter` num projeto `◌` clona
+  (URL registrada, depois `gh`, depois HTTPS) e `d` procura clones que você já
+  tem. Nos dois casos ele vincula a pasta e aplica o env file de uma vez.
+- Clones são casados pelo **remoto origin**, nunca pelo nome da pasta, então
+  duas pastas `api` sem relação jamais se confundem. A varredura é limitada às
+  raízes comuns de desenvolvimento, pula árvores de build/cache e é cacheada.
+- O env file é **por projeto**: `.env`, `.env.local` ou um caminho de monorepo
+  como `apps/web/.env` (`gitenv set <projeto> --env-file ...`). A política de
+  fim de linha também é por projeto, então capturar no Windows não leva CRLF
+  para um checkout Linux.
+- O repositório do vault não revela nomes de projeto, de perfil, URLs de
+  repositório nem caminhos de env: esses metadados ficam criptografados por
+  projeto sob identificadores aleatórios.
+
+### Atualizando da 0.2.x
+
+A 0.3.0 muda o layout do vault: os metadados de projeto saem do manifesto em
+texto puro para arquivos criptografados por projeto. A primeira execução da
+0.3.0 atualiza o vault existente e deixa a mudança pendente — publique com `s`
+na TUI ou `gitenv push`.
+
+Faça isso em **um** computador e depois rode `gitenv pull` nos outros. A
+atualização sorteia identificadores novos, então dois computadores atualizando
+de forma independente geram dois layouts diferentes do mesmo conteúdo; o gitenv
+recusa atualizar quando percebe que o remoto do vault está à frente, e puxar
+primeiro transforma a atualização em no-op. Binários antigos recusam um vault
+0.3.0 com uma mensagem clara de "unsupported vault version".
 
 ### Segurança
 

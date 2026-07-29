@@ -306,6 +306,23 @@ type v2Profile struct {
 	Checksum  string    `json:"checksum"`
 }
 
+// NeedsUpgrade reports whether the vault's on-disk format predates
+// ManifestVersion. It reads only the plaintext bootstrap file, so callers can
+// decide whether an upgrade is pending before paying for any remote check.
+func NeedsUpgrade(root string) (bool, error) {
+	data, err := os.ReadFile(filepath.Join(root, manifestName))
+	if err != nil {
+		return false, fmt.Errorf("read manifest: %w", err)
+	}
+	var probe struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return false, fmt.Errorf("parse manifest: %w", err)
+	}
+	return probe.Version < ManifestVersion, nil
+}
+
 // UpgradeManifest migrates a version-2 vault to the version-3 layout. It writes
 // each plaintext project as an encrypted projects/<id>/meta.age and copies every
 // profile ciphertext under random ids, then rewrites gitenv.json at v3. It

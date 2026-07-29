@@ -464,9 +464,45 @@ func updateProjectMetadata(cfg vault.LocalConfig, name string, mutate func(*vaul
 // EnsureVaultUpgraded runs the v2->v3 metadata upgrade when a vault is
 // configured. Both the TUI and the CLI call it right after resolving the vault
 // path and before reading the manifest.
+//
+// When an upgrade is pending it is refused if the remote demonstrably holds
+// commits this computer has not pulled. The upgrade assigns fresh random ids, so
+// two computers upgrading the same vault independently produce two different
+// layouts of identical content, and `git.Pull` is `merge --ff-only`: the second
+// one would face a manual merge of encrypted files. Pulling first means the
+// second computer receives an already-upgraded vault and this becomes a no-op.
+//
+// The gate requires *evidence* of a conflict, not proof of its absence. A vault
+// with no remote, or one whose remote cannot be reached, upgrades normally:
+// gitenv's core job is local env management, and blocking an offline computer
+// would break every user without a network to protect a rare race.
 func EnsureVaultUpgraded(cfg vault.LocalConfig) (bool, error) {
 	if strings.TrimSpace(cfg.VaultPath) == "" {
 		return false, nil
 	}
+	needed, err := vault.NeedsUpgrade(cfg.VaultPath)
+	if err != nil {
+		return false, err
+	}
+	if needed {
+		if err := refuseUpgradeWhenBehind(cfg.VaultPath); err != nil {
+			return false, err
+		}
+	}
 	return vault.UpgradeManifest(cfg.VaultPath)
+}
+
+// refuseUpgradeWhenBehind errors only when the vault remote is known to hold
+// incoming changes. The fetch it costs runs once per vault, when an upgrade is
+// actually pending, never on an ordinary launch.
+func refuseUpgradeWhenBehind(root string) error {
+	if !gitops.HasRemote(root, "origin") {
+		return nil
+	}
+	switch status := gitops.InspectSync(root); status.State {
+	case gitops.SyncRemoteAhead, gitops.SyncDiverged:
+		return fmt.Errorf("vault format upgrade needs an up-to-date vault: run gitenv pull first (%d incoming change(s))", status.Behind)
+	default:
+		return nil
+	}
 }
