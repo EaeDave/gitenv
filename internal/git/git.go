@@ -15,6 +15,12 @@ import (
 
 var credentialsInURL = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@\s]+@`)
 
+// embeddedCredential matches a URL whose userinfo carries a secret
+// (scheme://user:pass@host). A bare ssh login such as git@ has no ":" before
+// the "@" and is deliberately not treated as a credential, so ordinary ssh://
+// and scp-style remotes stay clonable.
+var embeddedCredential = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*://[^/@\s]*:[^/@\s]*@`)
+
 func Init(root string) error {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return fmt.Errorf("create git repository directory: %w", err)
@@ -26,7 +32,13 @@ func Init(root string) error {
 	return nil
 }
 
-func Clone(remote, dest string) error {
+func Clone(ctx context.Context, remote, dest string) error {
+	// Refuse before spawning anything: errors redact credentials, but a later
+	// slice persists the remote into vault metadata, so a credentialed URL must
+	// never reach the subprocess in the first place.
+	if embeddedCredential.MatchString(strings.TrimSpace(remote)) {
+		return fmt.Errorf("refusing to clone a remote with embedded credentials: %s", RedactURL(remote))
+	}
 	absolute, err := filepath.Abs(dest)
 	if err != nil {
 		return fmt.Errorf("resolve clone destination: %w", err)
@@ -35,8 +47,7 @@ func Clone(remote, dest string) error {
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return fmt.Errorf("create clone parent directory: %w", err)
 	}
-	_, err = run(parent, "clone", "--", remote, absolute)
-	if err != nil {
+	if _, err := runContext(ctx, parent, "clone", "--", remote, absolute); err != nil {
 		return fmt.Errorf("clone git repository: %w", err)
 	}
 	return nil
@@ -147,6 +158,53 @@ func runWithTimeout(dir string, timeout time.Duration, args ...string) (string, 
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	if err != nil {
+		return "", commandError(err, stdout.String(), stderr.String())
+	}
+	return stdout.String(), nil
+}
+
+// nonInteractiveGitEnv returns the process environment hardened so git — and
+// any ssh it spawns — never blocks on a credential or host-key prompt. Without
+// this, cloning a private repo on a freshly formatted machine (no key, no
+// stored token) would hang the TUI forever waiting on stdin.
+func nonInteractiveGitEnv() []string {
+	env := append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_ASKPASS=echo",
+		"SSH_ASKPASS=echo",
+		"SSH_ASKPASS_REQUIRE=never",
+	)
+	return append(env, sshBatchModeCommand(os.Getenv("GIT_SSH_COMMAND")))
+}
+
+// sshBatchModeCommand appends batch-mode flags to any inherited GIT_SSH_COMMAND
+// rather than clobbering a user's custom ssh invocation. BatchMode=yes disables
+// password prompts; accept-new trusts an unknown host once without prompting.
+func sshBatchModeCommand(inherited string) string {
+	const flags = "-o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+	base := strings.TrimSpace(inherited)
+	if base == "" {
+		base = "ssh"
+	}
+	return "GIT_SSH_COMMAND=" + base + " " + flags
+}
+
+// runContext runs a git command under the caller's context so a TUI can cancel
+// or time it out, with the non-interactive environment applied. It mirrors
+// runWithTimeout's error redaction but takes the context from the caller
+// instead of owning the timeout.
+func runContext(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = nonInteractiveGitEnv()
+	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()

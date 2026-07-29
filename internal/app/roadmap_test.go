@@ -75,18 +75,16 @@ func TestMigrateVaultAccessPreservesCiphertext(t *testing.T) {
 	if err := AddCurrentProject(&cfg, current, "api", "dev"); err != nil {
 		t.Fatal(err)
 	}
-	profilePath := vault.ProfilePath(cfg.VaultPath, "api", "dev")
-	before, err := os.ReadFile(profilePath)
-	if err != nil {
-		t.Fatal(err)
-	}
 	manifest, err := vault.LoadManifest(cfg.VaultPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest.Version = 1
-	manifest.WrappedIdentity = nil
-	if err := vault.SaveManifest(cfg.VaultPath, manifest); err != nil {
+	profilePath, ok := vault.ProfilePath(cfg.VaultPath, manifest, "api", "dev")
+	if !ok {
+		t.Fatal("profile path not resolved")
+	}
+	before, err := os.ReadFile(profilePath)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := MigrateVaultAccess(cfg, "migration-password", "migration-password", "legacy-device", vault.StoreIdentitySession); err != nil {
@@ -123,10 +121,11 @@ func TestProjectRepositoryIdentityIsPortableAndPathStaysLocal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := MatchVaultProject(manifest, CurrentProject{RepositoryIdentity: "github.com/eaedave/api"}); got != "api" {
-		t.Fatalf("match = %q", got)
+	if got := MatchVaultProjects(manifest, CurrentProject{RepositoryIdentity: "github.com/eaedave/api"}); len(got) != 1 || got[0] != "api" {
+		t.Fatalf("match = %v", got)
 	}
-	if len(manifest.Projects["api"].Repositories) != 1 {
+	repos := manifest.Projects["api"].Repositories
+	if len(repos) != 1 || repos[0].Identity != "github.com/eaedave/api" {
 		t.Fatalf("repository identity missing: %#v", manifest.Projects["api"])
 	}
 	data, err := os.ReadFile(filepath.Join(cfg.VaultPath, "gitenv.json"))

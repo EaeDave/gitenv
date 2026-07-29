@@ -107,6 +107,9 @@ func TestCloneVaultImportsRecovery(t *testing.T) {
 	root := t.TempDir()
 	firstConfig := filepath.Join(root, "first-config")
 	t.Setenv("GITENV_CONFIG_DIR", firstConfig)
+	// Simulate a fresh machine: no in-memory identity may leak in from an
+	// earlier test, or CreateVault would reuse it instead of writing identity.txt.
+	vault.ClearSessionIdentity()
 	first := vault.LocalConfig{Projects: map[string]vault.LocalProject{}}
 	recovery := filepath.Join(root, "recovery.txt")
 	if err := CreateVault(&first, filepath.Join(root, "source"), recovery, ""); err != nil {

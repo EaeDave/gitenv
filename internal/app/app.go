@@ -1,10 +1,14 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
+	"sort"
 	"strings"
 
 	gitops "github.com/eaedave/gitenv/internal/git"
@@ -12,11 +16,17 @@ import (
 )
 
 type CurrentProject struct {
-	Path               string
-	Name               string
-	HasEnv             bool
-	LinkedName         string
-	RepositoryIdentity string // canonical identity derived from the origin remote
+	Path       string
+	Name       string
+	HasEnv     bool
+	LinkedName string
+	// RepositoryIdentity is the canonical comparison key derived from the
+	// origin remote (git.NormalizeRemoteURL).
+	RepositoryIdentity string
+	// CloneURL is the credential-free origin remote URL exactly as configured,
+	// kept so another machine can clone this repository later. The canonical
+	// identity is lower-cased and scheme-less and is not always cloneable.
+	CloneURL string
 }
 
 func CreateVault(cfg *vault.LocalConfig, root, recoveryPath, remoteURL string) error {
@@ -68,7 +78,7 @@ func CloneVault(cfg *vault.LocalConfig, remoteURL, root, recoveryPath string) er
 	if err != nil {
 		return err
 	}
-	if err := gitops.Clone(remoteURL, absolute); err != nil {
+	if err := gitops.Clone(context.Background(), remoteURL, absolute); err != nil {
 		return err
 	}
 	if _, err := vault.LoadManifest(absolute); err != nil {
@@ -147,6 +157,13 @@ func DetectCurrent(cfg vault.LocalConfig, cwd string) (CurrentProject, error) {
 	// remote (best-effort: empty when the directory has no git remote).
 	if rawURL, urlErr := gitops.RemoteURL(absolute, "origin"); urlErr == nil {
 		current.RepositoryIdentity = gitops.NormalizeRemoteURL(rawURL)
+		// Record the exact remote URL so another machine can clone it later,
+		// but only when it is credential-free: invariant 7 forbids a
+		// credentialed URL ever reaching vault metadata, which is committed to
+		// the vault repo.
+		if !credentialedURL.MatchString(rawURL) {
+			current.CloneURL = rawURL
+		}
 	}
 	if _, err := os.Stat(filepath.Join(absolute, ".env")); err == nil {
 		current.HasEnv = true
@@ -167,18 +184,27 @@ func DetectCurrent(cfg vault.LocalConfig, cwd string) (CurrentProject, error) {
 	return current, nil
 }
 
-func MatchVaultProject(manifest vault.Manifest, current CurrentProject) string {
+// MatchVaultProjects returns the names of every vault project whose recorded
+// repositories include the current directory's identity, sorted by name. It is
+// plural because a monorepo is modelled as several gitenv projects sharing one
+// repository identity (web -> apps/web/.env, api -> apps/api/.env): cloning the
+// repository once must be able to adopt all of them, so returning only the
+// first would silently strip the rest.
+func MatchVaultProjects(manifest vault.Manifest, current CurrentProject) []string {
 	if current.RepositoryIdentity == "" {
-		return ""
+		return nil
 	}
+	var names []string
 	for name, project := range manifest.Projects {
 		for _, repository := range project.Repositories {
-			if repository == current.RepositoryIdentity {
-				return name
+			if repository.Identity == current.RepositoryIdentity {
+				names = append(names, name)
+				break
 			}
 		}
 	}
-	return ""
+	sort.Strings(names)
+	return names
 }
 
 func AddCurrentProject(cfg *vault.LocalConfig, current CurrentProject, name, profile string) error {
@@ -204,7 +230,7 @@ func AddCurrentProject(cfg *vault.LocalConfig, current CurrentProject, name, pro
 			return err
 		}
 		entry := manifest.Projects[name]
-		entry.Repositories = appendUnique(entry.Repositories, current.RepositoryIdentity)
+		entry.Repositories = appendRepository(entry.Repositories, vault.Repository{Identity: current.RepositoryIdentity, CloneURL: current.CloneURL})
 		manifest.Projects[name] = entry
 		if err := vault.SaveManifest(cfg.VaultPath, manifest); err != nil {
 			return err
@@ -232,7 +258,7 @@ func LinkExistingProject(cfg *vault.LocalConfig, current CurrentProject, name, p
 		local := cfg.Projects[name]
 		local.RepositoryIdentity = current.RepositoryIdentity
 		cfg.Projects[name] = local
-		project.Repositories = appendUnique(project.Repositories, current.RepositoryIdentity)
+		project.Repositories = appendRepository(project.Repositories, vault.Repository{Identity: current.RepositoryIdentity, CloneURL: current.CloneURL})
 		manifest.Projects[name] = project
 		if err := vault.SaveManifest(cfg.VaultPath, manifest); err != nil {
 			return err
@@ -244,6 +270,74 @@ func LinkExistingProject(cfg *vault.LocalConfig, current CurrentProject, name, p
 	return vault.Apply(cfg, name, profile, true)
 }
 
+// AttachRepository re-reads a linked project's current origin remote and records
+// it in both the local config and the vault metadata. A project first captured
+// in a directory with no git remote has an empty identity and is otherwise
+// undiscoverable and uncloneable forever (gap #3); calling this the moment the
+// user adds a remote gives the project its identity without re-capturing.
+//
+// It fails when there is nothing to record, which is what an explicit user
+// request wants. Callers recording opportunistically want TryAttachRepository.
+func AttachRepository(cfg vault.LocalConfig, name string) error {
+	recorded, err := TryAttachRepository(cfg, name)
+	if err != nil {
+		return err
+	}
+	if !recorded {
+		return fmt.Errorf("project %q directory has no recognizable origin remote", name)
+	}
+	return nil
+}
+
+// TryAttachRepository records a linked project's origin remote when there is one
+// to record, reporting whether it did. A directory with no origin, or one whose
+// remote is not a recognizable Git URL, is not an error: linking a project that
+// has no remote yet is legitimate and must not fail the link.
+func TryAttachRepository(cfg vault.LocalConfig, name string) (bool, error) {
+	local, ok := cfg.Projects[name]
+	if !ok || local.Path == "" {
+		return false, fmt.Errorf("project %q is not linked on this computer", name)
+	}
+	rawURL, err := gitops.RemoteURL(local.Path, "origin")
+	if err != nil {
+		return false, nil
+	}
+	identity := gitops.NormalizeRemoteURL(rawURL)
+	if identity == "" {
+		return false, nil
+	}
+	manifest, err := vault.LoadManifest(cfg.VaultPath)
+	if err != nil {
+		return false, err
+	}
+	if manifest.Sealed {
+		return false, errors.New("unlock the vault first: its metadata is encrypted and unreadable")
+	}
+	// The vault entry may not exist yet: `gitenv link` records the repository
+	// before the first capture, and that is the point — the identity is what
+	// makes the project discoverable on the next machine.
+	if _, exists := manifest.Projects[name]; !exists {
+		if _, err := manifest.EnsureProjectID(name); err != nil {
+			return false, err
+		}
+	}
+	entry := manifest.Projects[name]
+	// Only persist a credential-free clone URL (invariant 7); the canonical
+	// identity is always safe to store.
+	cloneURL := ""
+	if !credentialedURL.MatchString(rawURL) {
+		cloneURL = rawURL
+	}
+	entry.Repositories = appendRepository(entry.Repositories, vault.Repository{Identity: identity, CloneURL: cloneURL})
+	manifest.Projects[name] = entry
+	if err := vault.SaveManifest(cfg.VaultPath, manifest); err != nil {
+		return false, err
+	}
+	local.RepositoryIdentity = identity
+	cfg.Projects[name] = local
+	return true, vault.SaveLocal(cfg)
+}
+
 func AddRemote(cfg vault.LocalConfig, remoteURL string) error {
 	if cfg.VaultPath == "" {
 		return errors.New("no vault configured")
@@ -251,13 +345,28 @@ func AddRemote(cfg vault.LocalConfig, remoteURL string) error {
 	return gitops.AddRemote(cfg.VaultPath, "origin", remoteURL)
 }
 
-func appendUnique(values []string, value string) []string {
-	for _, existing := range values {
-		if existing == value {
-			return values
+// credentialedURL matches a remote URL whose userinfo carries a secret
+// (scheme://user:pass@host). git.embeddedCredential performs the identical
+// check but is unexported, so it is duplicated here: invariant 7 forbids a
+// credentialed URL ever being persisted into vault metadata, which is committed
+// to the vault repo.
+var credentialedURL = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*://[^/@\s]*:[^/@\s]*@`)
+
+// appendRepository records a repository on a project, matching on canonical
+// Identity. When the identity already exists but was stored without a clone URL
+// (a machine that only knew the canonical key), a newly observed credential-free
+// URL fills the gap: real clone URLs are learned lazily as machines with actual
+// remotes touch the project.
+func appendRepository(repos []vault.Repository, repo vault.Repository) []vault.Repository {
+	for i, existing := range repos {
+		if existing.Identity == repo.Identity {
+			if existing.CloneURL == "" && repo.CloneURL != "" {
+				repos[i].CloneURL = repo.CloneURL
+			}
+			return repos
 		}
 	}
-	return append(values, value)
+	return append(repos, repo)
 }
 
 func Pull(cfg vault.LocalConfig) error { return gitops.Pull(cfg.VaultPath) }
@@ -284,8 +393,23 @@ func expandHome(path string) string {
 	return path
 }
 
+// samePath compares two local paths. Windows and macOS default to
+// case-insensitive filesystems, so "C:\Dev\api" and "c:\dev\api" are the same
+// directory and must link to the same project.
 func samePath(a, b string) bool {
 	aa, errA := filepath.Abs(a)
 	bb, errB := filepath.Abs(b)
-	return errA == nil && errB == nil && filepath.Clean(aa) == filepath.Clean(bb)
+	if errA != nil || errB != nil {
+		return false
+	}
+	aa, bb = filepath.Clean(aa), filepath.Clean(bb)
+	if caseInsensitiveFS {
+		return strings.EqualFold(aa, bb)
+	}
+	return aa == bb
 }
+
+// caseInsensitiveFS reflects the platform default. It is deliberately not a
+// per-volume probe: a wrong "same path" answer only ever merges two links that
+// already point at the same directory.
+var caseInsensitiveFS = runtime.GOOS == "windows" || runtime.GOOS == "darwin"

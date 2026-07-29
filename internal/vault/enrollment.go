@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"filippo.io/age"
@@ -36,7 +38,6 @@ type EnrollmentRequest struct {
 type enrollmentManifest struct {
 	Version            int                 `json:"version"`
 	Recipients         []string            `json:"recipients"`
-	Projects           map[string]Project  `json:"projects"`
 	Devices            []Device            `json:"devices"`
 	EnrollmentRequests []EnrollmentRequest `json:"enrollment_requests"`
 }
@@ -57,9 +58,6 @@ func loadEnrollmentManifest(root string) (enrollmentManifest, error) {
 	var m enrollmentManifest
 	if err := json.Unmarshal(data, &m); err != nil {
 		return enrollmentManifest{}, fmt.Errorf("parse manifest: %w", err)
-	}
-	if m.Projects == nil {
-		m.Projects = map[string]Project{}
 	}
 	if m.Devices == nil {
 		m.Devices = []Device{}
@@ -113,6 +111,34 @@ func rollbackProfiles(backups []profileBackup) {
 	}
 }
 
+// collectVaultCiphertexts returns every *.age file under projects/, covering
+// both profile ciphertexts and per-project meta.age metadata. A missing
+// projects/ directory yields no files and no error. Entries come back in the
+// deterministic lexical order WalkDir visits.
+func collectVaultCiphertexts(root string) ([]string, error) {
+	projectsRoot := filepath.Join(root, projectsDir)
+	var paths []string
+	err := filepath.WalkDir(projectsRoot, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil // no projects directory yet
+			}
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(d.Name(), ciphertextExt) {
+			paths = append(paths, p)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walk vault ciphertexts: %w", err)
+	}
+	return paths, nil
+}
+
 // CreateEnrollmentRequest generates a fresh X25519 identity for this device and
 // returns an EnrollmentRequest containing only the public recipient string. The
 // caller must persist the returned identity locally (e.g., via SaveIdentity) and
@@ -140,18 +166,19 @@ func CreateEnrollmentRequest(name string) (*age.X25519Identity, EnrollmentReques
 }
 
 // ApproveEnrollmentRequest authorizes a pending enrollment by re-encrypting every
-// profile in the vault for the combined set of recipients (existing + new), then
-// updating the manifest to record the new device and remove the request.
+// encrypted file in the vault (profile ciphertexts and each project's meta.age)
+// for the combined set of recipients (existing + new), then updating the manifest
+// to record the new device and remove the request.
 //
-// approverIdentity must be able to decrypt all existing profile ciphertexts.
+// approverIdentity must be able to decrypt all existing ciphertexts.
 //
 // onManifestUpdate is optional. When non-nil it is called with the serialized
 // updated manifest (before disk write) so callers can stage it in git or run
-// additional validation. If it returns an error, all re-encrypted profile files
-// are rolled back to their original ciphertext.
+// additional validation. If it returns an error, all re-encrypted files are
+// rolled back to their original ciphertext.
 //
-// If any profile re-encryption or the manifest disk write fails, all profile
-// files that were already overwritten are rolled back atomically.
+// If any re-encryption or the manifest disk write fails, all files that were
+// already overwritten are rolled back atomically.
 func ApproveEnrollmentRequest(
 	root string,
 	approverIdentity age.Identity,
@@ -192,51 +219,45 @@ func ApproveEnrollmentRequest(
 	copy(allRecipients, existing)
 	allRecipients[len(existing)] = newRecipient
 
-	// Collect every profile file path.
-	type profileRef struct {
-		path    string
-		project string
-		name    string
-	}
-	var profiles []profileRef
-	for projName, proj := range m.Projects {
-		for profName := range proj.Profiles {
-			profiles = append(profiles, profileRef{
-				path:    ProfilePath(root, projName, profName),
-				project: projName,
-				name:    profName,
-			})
-		}
+	// Collect every encrypted file under projects/. Walking the tree covers both
+	// profile ciphertexts and each project's meta.age: without re-encrypting
+	// meta.age the newly enrolled device would clone the vault and see no projects
+	// at all, which is the bug this layout change fixes.
+	ciphertextPaths, err := collectVaultCiphertexts(root)
+	if err != nil {
+		return err
 	}
 
-	// Re-encrypt each profile; accumulate backups so we can roll back on failure.
+	// Re-encrypt each file; accumulate backups so we can roll back on failure.
+	// meta.age carries no checksum, so files are decrypted and re-encrypted
+	// verbatim without a checksum check.
 	var backups []profileBackup
-	for _, p := range profiles {
-		oldCiphertext, err := os.ReadFile(p.path)
+	for _, ciphertextPath := range ciphertextPaths {
+		oldCiphertext, err := os.ReadFile(ciphertextPath)
 		if err != nil {
 			rollbackProfiles(backups)
-			return fmt.Errorf("read profile %s/%s: %w", p.project, p.name, err)
+			return fmt.Errorf("read ciphertext %s: %w", ciphertextPath, err)
 		}
 
 		plaintext, err := Decrypt(oldCiphertext, approverIdentity)
 		if err != nil {
 			rollbackProfiles(backups)
-			return fmt.Errorf("decrypt profile %s/%s: %w", p.project, p.name, err)
+			return fmt.Errorf("decrypt ciphertext %s: %w", ciphertextPath, err)
 		}
 
 		newCiphertext, err := Encrypt(plaintext, allRecipients)
 		if err != nil {
 			rollbackProfiles(backups)
-			return fmt.Errorf("encrypt profile %s/%s: %w", p.project, p.name, err)
+			return fmt.Errorf("encrypt ciphertext %s: %w", ciphertextPath, err)
 		}
 
-		if err := WriteAtomic(p.path, newCiphertext, 0o600); err != nil {
+		if err := WriteAtomic(ciphertextPath, newCiphertext, 0o600); err != nil {
 			// WriteAtomic uses temp+rename; original file is intact on failure.
 			rollbackProfiles(backups)
-			return fmt.Errorf("write profile %s/%s: %w", p.project, p.name, err)
+			return fmt.Errorf("write ciphertext %s: %w", ciphertextPath, err)
 		}
 		// Record backup only after successful write so rollback knows what changed.
-		backups = append(backups, profileBackup{path: p.path, data: oldCiphertext})
+		backups = append(backups, profileBackup{path: ciphertextPath, data: oldCiphertext})
 	}
 
 	// Update manifest state.

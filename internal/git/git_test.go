@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -44,7 +45,7 @@ func TestCloneCommitPushAndPullFastForward(t *testing.T) {
 	runGit(t, seed, "push", "--set-upstream", "origin", "HEAD")
 
 	local := filepath.Join(temp, "local")
-	if err := Clone(remote, local); err != nil {
+	if err := Clone(context.Background(), remote, local); err != nil {
 		t.Fatalf("Clone() error = %v", err)
 	}
 	configureIdentity(t, local)
@@ -62,7 +63,7 @@ func TestCloneCommitPushAndPullFastForward(t *testing.T) {
 	}
 
 	peer := filepath.Join(temp, "peer")
-	if err := Clone(remote, peer); err != nil {
+	if err := Clone(context.Background(), remote, peer); err != nil {
 		t.Fatalf("peer Clone() error = %v", err)
 	}
 	configureIdentity(t, peer)
@@ -107,10 +108,10 @@ func TestPullRejectsNonFastForward(t *testing.T) {
 
 	local := filepath.Join(temp, "local")
 	peer := filepath.Join(temp, "peer")
-	if err := Clone(remote, local); err != nil {
+	if err := Clone(context.Background(), remote, local); err != nil {
 		t.Fatal(err)
 	}
-	if err := Clone(remote, peer); err != nil {
+	if err := Clone(context.Background(), remote, peer); err != nil {
 		t.Fatal(err)
 	}
 	configureIdentity(t, local)
@@ -131,7 +132,7 @@ func TestPullRejectsNonFastForward(t *testing.T) {
 
 func TestCloneErrorRedactsCredentials(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "clone")
-	err := Clone("https://secret-user:secret-pass@127.0.0.1:1/repo.git", dest)
+	err := Clone(context.Background(), "https://secret-user:secret-pass@127.0.0.1:1/repo.git", dest)
 	if err == nil {
 		t.Fatal("Clone() error = nil, want failure")
 	}

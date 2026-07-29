@@ -30,6 +30,10 @@ const (
 	screenAddProject
 	screenProfiles
 	screenNewProfile
+	screenAdoptClone          // form: destination directory for clone-and-adopt
+	screenAdoptLink           // form: local project directory to link
+	screenAdoptCandidates     // cursor menu: pick one of several discovered clones
+	screenProjectOptions      // form: env file + line endings
 	screenRemote              // cursor menu: Change / Test / Remove / Back
 	screenRemoteChange        // form: vault sync repository URL
 	screenConfirmRemoveRemote // y/N: remove vault sync repository
@@ -71,6 +75,7 @@ type reloadMsg struct {
 	needsMigration           bool
 	migrationIdentityMissing bool
 	needsUnlock              bool
+	upgraded                 bool // vault metadata was upgraded to v3 this load
 }
 
 type syncStatusMsg struct {
@@ -116,6 +121,9 @@ type model struct {
 	statuses                                               map[string]string
 	profileStatuses                                        map[string]map[string]string
 	projects, profiles                                     []string
+	projectStates                                          []app.ProjectState
+	adoptName, adoptPath                                   string
+	adoptCandidates                                        []string
 	projectCursor, profileCursor, menuCursor, fieldCursor  int
 	selectedProject, pendingProfile, pendingProject        string
 	pendingSync                                            gitops.SyncState
@@ -228,6 +236,10 @@ func (m model) beginSelfUpdate() (tea.Model, tea.Cmd) {
 
 func loadCmd(cfg *vault.LocalConfig, cwd string) tea.Cmd {
 	return func() tea.Msg {
+		upgraded, err := app.EnsureVaultUpgraded(*cfg)
+		if err != nil {
+			return operationMsg{err: err}
+		}
 		manifest, err := vault.LoadManifest(cfg.VaultPath)
 		if err != nil {
 			return operationMsg{err: err}
@@ -240,15 +252,16 @@ func loadCmd(cfg *vault.LocalConfig, cwd string) tea.Cmd {
 		identityAllowed := identityErr == nil && identity != nil
 		if manifest.WrappedIdentity == nil {
 			if !identityAllowed {
-				return reloadMsg{manifest: manifest, current: current, migrationIdentityMissing: true}
+				return reloadMsg{manifest: manifest, current: current, migrationIdentityMissing: true, upgraded: upgraded}
 			}
-			return reloadMsg{manifest: manifest, current: current, needsMigration: true}
+			return reloadMsg{manifest: manifest, current: current, needsMigration: true, upgraded: upgraded}
 		}
 		if !identityAllowed {
-			return reloadMsg{manifest: manifest, current: current, needsUnlock: true}
+			return reloadMsg{manifest: manifest, current: current, needsUnlock: true, upgraded: upgraded}
 		}
 		if current.LinkedName == "" {
-			if match := app.MatchVaultProject(manifest, current); match != "" {
+			if matches := app.MatchVaultProjects(manifest, current); len(matches) > 0 {
+				match := matches[0]
 				if err := vault.Link(cfg, match, current.Path); err != nil {
 					return operationMsg{err: err}
 				}
@@ -287,6 +300,7 @@ func loadCmd(cfg *vault.LocalConfig, cwd string) tea.Cmd {
 			current:          current,
 			remoteURL:        prefillURL,
 			remoteDisplayURL: displayURL,
+			upgraded:         upgraded,
 		}
 	}
 }
@@ -378,12 +392,53 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = screenConfirmCapture
 		return m, nil
 
+	case discoveryMsg:
+		m.busy = false
+		if msg.err != nil {
+			m.errText = safeError(msg.err)
+			return m, nil
+		}
+		found := 0
+		for _, paths := range msg.found {
+			found += len(paths)
+		}
+		m.info = fmt.Sprintf("scan complete — found %d local %s", found, pluralize(found, "repository", "repositories"))
+		return m, tea.Batch(loadCmd(m.cfg, m.cwd), inspectSyncCmd(m.cfg))
+
+	case adoptMsg:
+		m.busy = false
+		m.screen = screenProjects
+		if msg.err != nil {
+			if msg.outcome.Method != "" {
+				// The clone landed but adopting (link + apply) did not finish. The
+				// link may already be persisted, so still reload; tell the user the
+				// repository is on disk and its env file needs attention.
+				m.errText = fmt.Sprintf("cloned %s via %s into %s, but adopting did not finish: %s — the repository is on disk; open it to resolve its env file", msg.project, msg.outcome.Method, m.adoptPath, safeError(msg.err))
+			} else {
+				m.errText = safeError(msg.err)
+			}
+			return m, tea.Batch(loadCmd(m.cfg, m.cwd), inspectSyncCmd(m.cfg))
+		}
+		if msg.outcome.Method != "" {
+			m.info = fmt.Sprintf("adopted %s — cloned via %s into %s", msg.project, msg.outcome.Method, m.adoptPath)
+		} else {
+			m.info = fmt.Sprintf("adopted %s — linked %s", msg.project, m.adoptPath)
+		}
+		return m, tea.Batch(loadCmd(m.cfg, m.cwd), inspectSyncCmd(m.cfg))
+
 	case reloadMsg:
 		m.busy = false
+		if msg.upgraded {
+			m.info = "vault upgraded to v3 — press s to publish the change"
+		}
 		m.manifest = msg.manifest
 		m.statuses = msg.statuses
 		m.profileStatuses = msg.profileStatuses
-		m.projects = sortedKeys(m.cfg.Projects)
+		m.projectStates = app.ProjectStates(*m.cfg, m.manifest, m.statuses)
+		m.projects = projectNames(m.projectStates)
+		if m.projectCursor >= len(m.projects) {
+			m.projectCursor = max(0, len(m.projects)-1)
+		}
 		m.current = msg.current
 		m.remoteURL = msg.remoteURL
 		m.remoteDisplayURL = msg.remoteDisplayURL
@@ -445,7 +500,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				screenAddProject, screenNewProfile,
 				screenRemoteChange, screenConfirmRemoveRemote,
 				screenMigrate, screenUnlock, screenUnlockPassword,
-				screenImportRecovery, screenRecovery:
+				screenImportRecovery, screenRecovery,
+				screenProjectOptions:
 				m.screen = screenProjects
 			case screenEnrollRequest:
 				m.screen = screenUnlock

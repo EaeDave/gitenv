@@ -59,30 +59,50 @@ func Capture(cfg *LocalConfig, project, profile string) error {
 	if !ok {
 		return fmt.Errorf("project %q is not linked on this computer", project)
 	}
-	plaintext, err := os.ReadFile(filepath.Join(local.Path, ".env"))
-	if err != nil {
-		return fmt.Errorf("read project .env: %w", err)
-	}
 	manifest, err := LoadManifest(cfg.VaultPath)
 	if err != nil {
 		return err
 	}
+	metadata, err := ProjectEntry(manifest, project)
+	if err != nil {
+		return err
+	}
+	envPath, err := EnvPath(local, metadata)
+	if err != nil {
+		return err
+	}
+	plaintext, err := os.ReadFile(envPath)
+	if err != nil {
+		return fmt.Errorf("read project env file: %w", err)
+	}
+	// Store canonical bytes: normalizing before both encryption and checksum
+	// keeps a converting policy from reporting the captured file as modified.
+	canonical := NormalizeStored(plaintext, metadata.LineEndings)
 	recipients, err := ParseRecipients(manifest.Recipients)
 	if err != nil {
 		return err
 	}
-	ciphertext, err := Encrypt(plaintext, recipients)
+	ciphertext, err := Encrypt(canonical, recipients)
 	if err != nil {
 		return err
 	}
-	if err := WriteAtomic(ProfilePath(cfg.VaultPath, project, profile), ciphertext, 0o600); err != nil {
+	// Ensure the profile carries an id before resolving its ciphertext path;
+	// the random id names the file so profile names never appear on disk.
+	if _, err := manifest.EnsureProfileID(project, profile); err != nil {
+		return err
+	}
+	profilePath, ok := ProfilePath(cfg.VaultPath, manifest, project, profile)
+	if !ok {
+		return fmt.Errorf("resolve ciphertext path for profile %q of project %q", profile, project)
+	}
+	if err := WriteAtomic(profilePath, ciphertext, 0o600); err != nil {
 		return err
 	}
 	entry := manifest.Projects[project]
-	if entry.Profiles == nil {
-		entry.Profiles = map[string]Profile{}
-	}
-	entry.Profiles[profile] = Profile{UpdatedAt: time.Now().UTC(), Checksum: Checksum(plaintext)}
+	stored := entry.Profiles[profile]
+	stored.UpdatedAt = time.Now().UTC()
+	stored.Checksum = Checksum(canonical)
+	entry.Profiles[profile] = stored
 	manifest.Projects[project] = entry
 	if err := SaveManifest(cfg.VaultPath, manifest); err != nil {
 		return err
@@ -105,13 +125,18 @@ func Apply(cfg *LocalConfig, project, profile string, force bool) error {
 	if !ok {
 		return fmt.Errorf("project %q does not exist in vault", project)
 	}
-	target := filepath.Join(local.Path, ".env")
+	target, err := EnvPath(local, projectEntry)
+	if err != nil {
+		return err
+	}
 	if existing, readErr := os.ReadFile(target); readErr == nil && !force {
 		if local.ActiveProfile == "" {
 			return errors.New("local .env is unmanaged; capture it or use --force")
 		}
 		active, exists := projectEntry.Profiles[local.ActiveProfile]
-		if !exists || Checksum(existing) != active.Checksum {
+		// Compare against canonical bytes so a CRLF working copy under a
+		// converting policy is not mistaken for an uncaptured change.
+		if !exists || Checksum(NormalizeStored(existing, projectEntry.LineEndings)) != active.Checksum {
 			return errors.New("local .env has uncaptured changes; capture it or use --force")
 		}
 	} else if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
@@ -121,7 +146,12 @@ func Apply(cfg *LocalConfig, project, profile string, force bool) error {
 	if err != nil {
 		return err
 	}
-	if err := WriteAtomic(target, plaintext, 0o600); err != nil {
+	// A fresh clone may name a nested env path (apps/web/.env) whose parent
+	// directory does not exist yet, so create it before writing.
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return fmt.Errorf("create env file directory: %w", err)
+	}
+	if err := WriteAtomic(target, RenderForDisk(plaintext, projectEntry.LineEndings), 0o600); err != nil {
 		return err
 	}
 	local.ActiveProfile = profile
@@ -144,7 +174,11 @@ func ReadProfile(cfg *LocalConfig, project, profile string) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("profile %q does not exist for project %q", profile, project)
 	}
-	ciphertext, err := os.ReadFile(ProfilePath(cfg.VaultPath, project, profile))
+	profilePath, ok := ProfilePath(cfg.VaultPath, manifest, project, profile)
+	if !ok {
+		return nil, fmt.Errorf("resolve ciphertext path for profile %q of project %q", profile, project)
+	}
+	ciphertext, err := os.ReadFile(profilePath)
 	if err != nil {
 		return nil, fmt.Errorf("read encrypted profile: %w", err)
 	}
@@ -184,7 +218,10 @@ func RemoveProfile(cfg *LocalConfig, project, profile string) error {
 	if _, exists := entry.Profiles[profile]; !exists {
 		return fmt.Errorf("profile %q does not exist for project %q", profile, project)
 	}
-	profilePath := ProfilePath(cfg.VaultPath, project, profile)
+	profilePath, ok := ProfilePath(cfg.VaultPath, manifest, project, profile)
+	if !ok {
+		return fmt.Errorf("resolve ciphertext path for profile %q of project %q", profile, project)
+	}
 	backupPath := profilePath + ".removing"
 	if err := os.Rename(profilePath, backupPath); err != nil {
 		return fmt.Errorf("stage profile removal: %w", err)
@@ -215,18 +252,26 @@ func Status(cfg LocalConfig, project string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	entry, ok := manifest.Projects[project].Profiles[local.ActiveProfile]
+	projectEntry, err := ProjectEntry(manifest, project)
+	if err != nil {
+		return "", err
+	}
+	profile, ok := projectEntry.Profiles[local.ActiveProfile]
 	if !ok {
 		return "missing", nil
 	}
-	data, err := os.ReadFile(filepath.Join(local.Path, ".env"))
+	envPath, err := EnvPath(local, projectEntry)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(envPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return "missing", nil
 	}
 	if err != nil {
 		return "", err
 	}
-	if Checksum(data) == entry.Checksum {
+	if Checksum(NormalizeStored(data, projectEntry.LineEndings)) == profile.Checksum {
 		return "clean", nil
 	}
 	return "modified", nil
@@ -249,14 +294,18 @@ func ProfileStatuses(cfg LocalConfig, project string) (map[string]string, error)
 	if !ok {
 		return nil, nil
 	}
-	data, readErr := os.ReadFile(filepath.Join(local.Path, ".env"))
+	envPath, err := EnvPath(local, entry)
+	if err != nil {
+		return nil, err
+	}
+	data, readErr := os.ReadFile(envPath)
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		return nil, readErr
 	}
 	hasEnv := readErr == nil
 	localSum := ""
 	if hasEnv {
-		localSum = Checksum(data)
+		localSum = Checksum(NormalizeStored(data, entry.LineEndings))
 	}
 	statuses := make(map[string]string, len(entry.Profiles))
 	for name, profile := range entry.Profiles {

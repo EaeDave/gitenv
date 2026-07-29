@@ -6,11 +6,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"filippo.io/age"
 )
 
-// setupEnrollmentVault creates a fully-initialized vault with an approver identity,
-// links a test project, and captures two profiles. Returns the vault root, the
-// per-test config dir (already set via t.Setenv), and the approver recipient string.
+// setupEnrollmentVault builds a v3 vault directly, avoiding service.go (owned by
+// another slice): a saved approver identity, a project "myapp" with two encrypted
+// profiles, and the encrypted metadata that ties them together. It returns the
+// vault root; the per-test config dir is set via t.Setenv.
 func setupEnrollmentVault(t *testing.T) (root string) {
 	t.Helper()
 	root = t.TempDir()
@@ -24,38 +28,65 @@ func setupEnrollmentVault(t *testing.T) (root string) {
 	if err := SaveIdentity(identity); err != nil {
 		t.Fatal(err)
 	}
+	// Pin the session so LoadManifest is deterministic across tests.
+	SetSessionIdentity(identity)
+	t.Cleanup(ClearSessionIdentity)
 
 	vaultDir := filepath.Join(root, "vault")
-	if err := Init(vaultDir, identity.Recipient().String()); err != nil {
-		t.Fatal(err)
+	recipients := []age.Recipient{identity.Recipient()}
+	manifest := Manifest{
+		Version:    ManifestVersion,
+		Recipients: []string{identity.Recipient().String()},
+		Projects:   map[string]Project{},
 	}
-
-	projectDir := filepath.Join(root, "project")
-	if err := os.MkdirAll(projectDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg := LocalConfig{VaultPath: vaultDir, Projects: map[string]LocalProject{}}
-	if err := Link(&cfg, "myapp", projectDir); err != nil {
-		t.Fatal(err)
-	}
-	if err := SaveLocal(cfg); err != nil {
-		t.Fatal(err)
-	}
-
-	// Capture two distinct profiles so approval must handle multiple files.
+	// Two distinct profiles so approval must handle multiple files.
 	for _, env := range []struct{ profile, content string }{
 		{"dev", "ENV=dev\nDATABASE_URL=postgres://dev\n"},
 		{"prod", "ENV=prod\nDATABASE_URL=postgres://prod\n"},
 	} {
-		if err := os.WriteFile(filepath.Join(projectDir, ".env"), []byte(env.content), 0o600); err != nil {
+		profileID, err := manifest.EnsureProfileID("myapp", env.profile)
+		if err != nil {
 			t.Fatal(err)
 		}
-		if err := Capture(&cfg, "myapp", env.profile); err != nil {
+		entry := manifest.Projects["myapp"]
+		stored := entry.Profiles[env.profile]
+		stored.Checksum = Checksum([]byte(env.content))
+		stored.UpdatedAt = time.Now().UTC()
+		entry.Profiles[env.profile] = stored
+		manifest.Projects["myapp"] = entry
+
+		ciphertext, err := Encrypt([]byte(env.content), recipients)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dest := filepath.Join(vaultDir, filepath.FromSlash(profileRelPath(entry.ID, profileID)))
+		if err := WriteAtomic(dest, ciphertext, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
+	if err := SaveManifest(vaultDir, manifest); err != nil {
+		t.Fatal(err)
+	}
 	return vaultDir
+}
+
+// profileCiphertext resolves and reads a profile ciphertext through the v3
+// layout, loading the manifest to map names to random ids.
+func profileCiphertext(t *testing.T, vaultDir, project, profile string) []byte {
+	t.Helper()
+	manifest, err := LoadManifest(vaultDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, ok := ProfilePath(vaultDir, manifest, project, profile)
+	if !ok {
+		t.Fatalf("profile %s/%s has no ciphertext path", project, profile)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 // TestCreateEnrollmentRequestNoPrivateKey verifies that the returned
@@ -88,7 +119,7 @@ func TestCreateEnrollmentRequestNoPrivateKey(t *testing.T) {
 }
 
 // TestApproveEnrollmentRequestNewIdentityDecryptsAll verifies that after approval
-// the new device's identity can decrypt every profile in the vault.
+// the new device's identity can decrypt every profile AND the project metadata.
 func TestApproveEnrollmentRequestNewIdentityDecryptsAll(t *testing.T) {
 	vaultDir := setupEnrollmentVault(t)
 
@@ -110,10 +141,7 @@ func TestApproveEnrollmentRequestNewIdentityDecryptsAll(t *testing.T) {
 
 	// New identity must decrypt both profiles.
 	for _, profile := range []string{"dev", "prod"} {
-		ciphertext, err := os.ReadFile(ProfilePath(vaultDir, "myapp", profile))
-		if err != nil {
-			t.Fatalf("read profile %s: %v", profile, err)
-		}
+		ciphertext := profileCiphertext(t, vaultDir, "myapp", profile)
 		plaintext, err := Decrypt(ciphertext, newIdentity)
 		if err != nil {
 			t.Errorf("new identity cannot decrypt profile %s: %v", profile, err)
@@ -121,6 +149,24 @@ func TestApproveEnrollmentRequestNewIdentityDecryptsAll(t *testing.T) {
 		if len(plaintext) == 0 {
 			t.Errorf("decrypted profile %s is empty", profile)
 		}
+	}
+
+	// The point of re-encrypting meta.age: the new device must read metadata too,
+	// otherwise it clones the vault and sees zero projects.
+	manifest, err := LoadManifest(vaultDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, ok := ProjectDir(vaultDir, manifest, "myapp")
+	if !ok {
+		t.Fatal("project directory unresolved")
+	}
+	metaCiphertext, err := os.ReadFile(filepath.Join(dir, metadataName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Decrypt(metaCiphertext, newIdentity); err != nil {
+		t.Errorf("new identity cannot decrypt project metadata: %v", err)
 	}
 }
 
@@ -147,10 +193,7 @@ func TestApproveEnrollmentRequestOldIdentityStillWorks(t *testing.T) {
 
 	// Original identity must still decrypt both profiles.
 	for _, profile := range []string{"dev", "prod"} {
-		ciphertext, err := os.ReadFile(ProfilePath(vaultDir, "myapp", profile))
-		if err != nil {
-			t.Fatalf("read profile %s: %v", profile, err)
-		}
+		ciphertext := profileCiphertext(t, vaultDir, "myapp", profile)
 		if _, err := Decrypt(ciphertext, approver); err != nil {
 			t.Errorf("original identity cannot decrypt profile %s after enrollment: %v", profile, err)
 		}
@@ -217,19 +260,15 @@ func TestApproveEnrollmentRequestManifestState(t *testing.T) {
 }
 
 // TestApproveEnrollmentRequestCallbackFailureRollsBack verifies that when
-// onManifestUpdate returns an error, all re-encrypted profile files are restored
-// to their original ciphertext.
+// onManifestUpdate returns an error, all re-encrypted files are restored to
+// their original ciphertext.
 func TestApproveEnrollmentRequestCallbackFailureRollsBack(t *testing.T) {
 	vaultDir := setupEnrollmentVault(t)
 
-	// Record original ciphertexts before approval attempt.
+	// Record original ciphertexts before the approval attempt.
 	original := map[string][]byte{}
 	for _, profile := range []string{"dev", "prod"} {
-		data, err := os.ReadFile(ProfilePath(vaultDir, "myapp", profile))
-		if err != nil {
-			t.Fatal(err)
-		}
-		original[profile] = data
+		original[profile] = profileCiphertext(t, vaultDir, "myapp", profile)
 	}
 
 	_, req, err := CreateEnrollmentRequest("failing-device")
@@ -258,20 +297,9 @@ func TestApproveEnrollmentRequestCallbackFailureRollsBack(t *testing.T) {
 
 	// Profile files must be identical to pre-approval originals.
 	for _, profile := range []string{"dev", "prod"} {
-		data, err := os.ReadFile(ProfilePath(vaultDir, "myapp", profile))
-		if err != nil {
-			t.Fatalf("read profile %s after rollback: %v", profile, err)
-		}
+		data := profileCiphertext(t, vaultDir, "myapp", profile)
 		if string(data) != string(original[profile]) {
 			t.Errorf("profile %s was not rolled back: ciphertext changed", profile)
-		}
-	}
-
-	// Original identity must still be able to decrypt (rollback was clean).
-	for _, profile := range []string{"dev", "prod"} {
-		data, err := os.ReadFile(ProfilePath(vaultDir, "myapp", profile))
-		if err != nil {
-			t.Fatal(err)
 		}
 		if _, err := Decrypt(data, approver); err != nil {
 			t.Errorf("original identity cannot decrypt rolled-back profile %s: %v", profile, err)

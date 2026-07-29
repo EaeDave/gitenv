@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -142,6 +143,14 @@ func TestRemoveProfileRejectsActiveAndRemovesInactive(t *testing.T) {
 	if err := Apply(&cfg, "api", "dev", false); err != nil {
 		t.Fatal(err)
 	}
+	before, err := LoadManifest(vaultDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prodPath, ok := ProfilePath(vaultDir, before, "api", "prod")
+	if !ok {
+		t.Fatal("prod ciphertext path unresolved before removal")
+	}
 	if err := RemoveProfile(&cfg, "api", "prod"); err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +161,7 @@ func TestRemoveProfileRejectsActiveAndRemovesInactive(t *testing.T) {
 	if _, exists := manifest.Projects["api"].Profiles["prod"]; exists {
 		t.Fatal("profile remains in manifest")
 	}
-	if _, err := os.Stat(ProfilePath(vaultDir, "api", "prod")); !os.IsNotExist(err) {
+	if _, err := os.Stat(prodPath); !os.IsNotExist(err) {
 		t.Fatalf("profile file still exists: %v", err)
 	}
 }
@@ -274,5 +283,209 @@ func TestProfileStatusesMarksOnlyActiveProfileModified(t *testing.T) {
 	}
 	if statuses["prod"] != "missing" || statuses["dev"] != "" {
 		t.Fatalf("missing state = %#v", statuses)
+	}
+}
+
+// setProjectMeta records a per-project EnvFile and LineEndings policy directly
+// in the vault manifest before a capture, standing in for the app-layer setters
+// owned by another slice.
+func setProjectMeta(t *testing.T, vaultDir, project, envFile string, policy LineEndingPolicy) {
+	t.Helper()
+	manifest, err := LoadManifest(vaultDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manifest.EnsureProjectID(project); err != nil {
+		t.Fatal(err)
+	}
+	entry := manifest.Projects[project]
+	entry.EnvFile = envFile
+	entry.LineEndings = policy
+	manifest.Projects[project] = entry
+	if err := SaveManifest(vaultDir, manifest); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCaptureApplyUsesNestedEnvFile(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("GITENV_CONFIG_DIR", filepath.Join(root, "config"))
+	identity, err := GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveIdentity(identity); err != nil {
+		t.Fatal(err)
+	}
+	vaultDir, projectDir := filepath.Join(root, "vault"), filepath.Join(root, "project")
+	if err := Init(vaultDir, identity.Recipient().String()); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(projectDir, "apps", "web")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("API_URL=https://dev\n")
+	if err := os.WriteFile(filepath.Join(nested, ".env"), original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := LocalConfig{VaultPath: vaultDir, Projects: map[string]LocalProject{}}
+	if err := Link(&cfg, "web", projectDir); err != nil {
+		t.Fatal(err)
+	}
+	setProjectMeta(t, vaultDir, "web", "apps/web/.env", LineEndingsPreserve)
+	if err := Capture(&cfg, "web", "dev"); err != nil {
+		t.Fatal(err)
+	}
+	// Remove the whole nested directory so apply must recreate the parent of a
+	// path that does not exist in a fresh clone.
+	if err := os.RemoveAll(filepath.Join(projectDir, "apps")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Apply(&cfg, "web", "dev", false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(nested, ".env"))
+	if err != nil {
+		t.Fatalf("apply did not write the nested env file: %v", err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("applied bytes = %q, want %q", got, original)
+	}
+	status, err := Status(cfg, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "clean" {
+		t.Fatalf("status after apply = %q, want clean", status)
+	}
+}
+
+func TestCaptureApplyLFPolicyNormalizesCRLF(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("GITENV_CONFIG_DIR", filepath.Join(root, "config"))
+	identity, err := GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveIdentity(identity); err != nil {
+		t.Fatal(err)
+	}
+	vaultDir, projectDir := filepath.Join(root, "vault"), filepath.Join(root, "project")
+	if err := Init(vaultDir, identity.Recipient().String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	envFile := filepath.Join(projectDir, ".env")
+	crlf := []byte("A=1\r\nB=2\r\n")
+	if err := os.WriteFile(envFile, crlf, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := LocalConfig{VaultPath: vaultDir, Projects: map[string]LocalProject{}}
+	if err := Link(&cfg, "api", projectDir); err != nil {
+		t.Fatal(err)
+	}
+	setProjectMeta(t, vaultDir, "api", "", LineEndingsLF)
+	if err := Capture(&cfg, "api", "dev"); err != nil {
+		t.Fatal(err)
+	}
+	// The lf policy stores canonical LF, not the CRLF working copy.
+	plaintext, err := ReadProfile(&cfg, "api", "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(plaintext) != "A=1\nB=2\n" {
+		t.Fatalf("stored bytes = %q, want LF-canonical", plaintext)
+	}
+	// Capture must not rewrite the working copy; it stays CRLF on disk.
+	onDisk, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(onDisk, []byte("\r\n")) {
+		t.Fatalf("capture rewrote the working copy: %q", onDisk)
+	}
+	// A CRLF working copy under lf must compare equal to its LF snapshot.
+	status, err := Status(cfg, "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "clean" {
+		t.Fatalf("status of CRLF working copy under lf = %q, want clean", status)
+	}
+	// The canonical match means apply is not blocked; it rewrites the file LF.
+	if err := Apply(&cfg, "api", "dev", false); err != nil {
+		t.Fatalf("apply blocked despite canonical match: %v", err)
+	}
+	got, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "A=1\nB=2\n" {
+		t.Fatalf("apply wrote %q, want LF", got)
+	}
+}
+
+func TestCaptureApplyCRLFPolicyWritesCRLF(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("GITENV_CONFIG_DIR", filepath.Join(root, "config"))
+	identity, err := GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveIdentity(identity); err != nil {
+		t.Fatal(err)
+	}
+	vaultDir, projectDir := filepath.Join(root, "vault"), filepath.Join(root, "project")
+	if err := Init(vaultDir, identity.Recipient().String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	envFile := filepath.Join(projectDir, ".env")
+	lf := []byte("A=1\nB=2\n")
+	if err := os.WriteFile(envFile, lf, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := LocalConfig{VaultPath: vaultDir, Projects: map[string]LocalProject{}}
+	if err := Link(&cfg, "api", projectDir); err != nil {
+		t.Fatal(err)
+	}
+	setProjectMeta(t, vaultDir, "api", "", LineEndingsCRLF)
+	if err := Capture(&cfg, "api", "dev"); err != nil {
+		t.Fatal(err)
+	}
+	// crlf also stores canonical LF; only the on-disk rendering differs.
+	plaintext, err := ReadProfile(&cfg, "api", "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(plaintext) != string(lf) {
+		t.Fatalf("stored bytes = %q, want LF-canonical", plaintext)
+	}
+	// Apply must render CRLF on disk.
+	if err := os.Remove(envFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := Apply(&cfg, "api", "dev", false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "A=1\r\nB=2\r\n" {
+		t.Fatalf("apply wrote %q, want CRLF", got)
+	}
+	// A CRLF working copy under crlf still compares equal to its LF snapshot.
+	status, err := Status(cfg, "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "clean" {
+		t.Fatalf("status of CRLF working copy under crlf = %q, want clean", status)
 	}
 }

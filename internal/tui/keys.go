@@ -29,10 +29,13 @@ func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.onboardingKey(key)
 	case screenCreate, screenClone, screenAddProject, screenNewProfile,
 		screenRemoteChange, screenMigrate, screenUnlockPassword,
-		screenEnrollRequest, screenImportRecovery, screenRecovery:
+		screenEnrollRequest, screenImportRecovery, screenRecovery,
+		screenAdoptClone, screenAdoptLink, screenProjectOptions:
 		return m.formKey(key)
 	case screenProjects:
 		return m.projectsKey(key)
+	case screenAdoptCandidates:
+		return m.adoptCandidatesKey(key)
 	case screenProfiles:
 		return m.profilesKey(key)
 	case screenRemote:
@@ -134,6 +137,12 @@ func (m model) cancelForm() (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	switch m.screen {
+	case screenAdoptClone, screenAdoptLink, screenProjectOptions:
+		m.screen = screenProjects
+		m.fields = nil
+		return m, nil
+	}
 	if m.screen == screenRemoteChange {
 		m.screen = screenRemote
 	} else if m.cfg.VaultPath == "" {
@@ -208,6 +217,35 @@ func (m model) submitFormValues(values []string) (tea.Model, tea.Cmd) {
 		return m, opCmd(func() error { return app.ImportIdentityValue(values[0]) }, "recovery identity imported")
 	case screenRecovery:
 		return m, opCmd(func() error { return app.ExportIdentity(values[0]) }, "recovery identity exported")
+	case screenAdoptClone:
+		if values[0] == "" {
+			m.busy = false
+			m.errText = "destination directory is required"
+			return m, nil
+		}
+		m.adoptPath = values[0]
+		return m, cloneAdoptCmd(m.cfg, m.adoptName, values[0])
+	case screenAdoptLink:
+		if values[0] == "" {
+			m.busy = false
+			m.errText = "project directory is required"
+			return m, nil
+		}
+		m.adoptPath = values[0]
+		return m, linkAdoptCmd(m.cfg, m.adoptName, values[0])
+	case screenProjectOptions:
+		name, envFile, endings := m.adoptName, values[0], values[1]
+		cfg := *m.cfg
+		return m, opCmd(func() error {
+			policy, err := vault.ParseLineEndingPolicy(endings)
+			if err != nil {
+				return err
+			}
+			if err := app.SetProjectEnvFile(cfg, name, envFile); err != nil {
+				return err
+			}
+			return app.SetProjectLineEndings(cfg, name, policy)
+		}, "project options updated")
 	}
 	m.busy = false
 	return m, nil
@@ -268,6 +306,11 @@ func (m model) projectsKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.syncStatus.State = gitops.SyncChecking
 		return m, tea.Batch(loadCmd(m.cfg, m.cwd), inspectSyncCmd(m.cfg))
+	case "d":
+		m.busy = true
+		return m, discoverCmd(m.cfg)
+	case "o":
+		m.openProjectOptions()
 	}
 	return m, nil
 }
@@ -323,13 +366,31 @@ func (m model) syncDiffKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) openSelectedProject() {
-	if len(m.projects) == 0 {
+	state, ok := m.selectedProjectState()
+	if !ok {
 		return
 	}
-	m.selectedProject = m.projects[m.projectCursor]
-	m.profiles = sortedKeys(m.manifest.Projects[m.selectedProject].Profiles)
-	m.profileCursor = 0
-	m.screen = screenProfiles
+	switch state.Kind {
+	case app.ProjectLinked:
+		m.selectedProject = state.Name
+		m.profiles = sortedKeys(m.manifest.Projects[state.Name].Profiles)
+		m.profileCursor = 0
+		m.screen = screenProfiles
+	case app.ProjectMissing:
+		m.openAdoptClone(state)
+	case app.ProjectFound:
+		if len(state.Candidates) > 1 {
+			m.openAdoptCandidates(state)
+		} else {
+			path := ""
+			if len(state.Candidates) == 1 {
+				path = state.Candidates[0]
+			}
+			m.openAdoptLink(state, path)
+		}
+	case app.ProjectNoRepo:
+		m.openAdoptLink(state, "")
+	}
 }
 
 func (m *model) openAddProject() {
@@ -356,16 +417,89 @@ func (m *model) openAddProject() {
 }
 
 func (m model) captureSelectedProject() (tea.Model, tea.Cmd) {
-	if len(m.projects) == 0 {
+	state, ok := m.selectedProjectState()
+	if !ok {
 		return m, nil
 	}
-	project := m.projects[m.projectCursor]
-	active := m.cfg.Projects[project].ActiveProfile
+	if state.Kind != app.ProjectLinked {
+		m.errText = "press enter to adopt this project before capturing"
+		return m, nil
+	}
+	active := m.cfg.Projects[state.Name].ActiveProfile
 	if active == "" {
 		m.errText = "project has no active profile"
 		return m, nil
 	}
-	return m.requestCapturePreview(project, active, captureExistingProfile)
+	return m.requestCapturePreview(state.Name, active, captureExistingProfile)
+}
+
+// openProjectOptions opens the env-file / line-endings form for the selected
+// vault project. It works whether or not the project is linked here, because
+// both settings live in the encrypted project metadata, not the local link.
+func (m *model) openProjectOptions() {
+	state, ok := m.selectedProjectState()
+	if !ok {
+		return
+	}
+	envFile := state.EnvFile
+	if envFile == "" {
+		envFile = vault.DefaultEnvFile
+	}
+	m.adoptName = state.Name
+	m.screen = screenProjectOptions
+	m.fields = []field{
+		{"Env file", envFile, false},
+		{"Line endings", state.LineEndings.String(), false},
+	}
+	m.fieldCursor = 0
+}
+
+// openAdoptClone opens the clone-and-adopt form for a project with a recorded
+// repository but no local clone, prefilling the workspace destination.
+func (m *model) openAdoptClone(state app.ProjectState) {
+	m.adoptName = state.Name
+	m.screen = screenAdoptClone
+	m.fields = []field{{"Destination directory", app.SuggestCloneDest(*m.cfg, state.Name), false}}
+	m.fieldCursor = 0
+}
+
+// openAdoptLink opens the link form for a project whose clone is already on
+// disk, prefilling the discovered path when there is exactly one candidate.
+func (m *model) openAdoptLink(state app.ProjectState, path string) {
+	m.adoptName = state.Name
+	m.screen = screenAdoptLink
+	m.fields = []field{{"Project directory", path, false}}
+	m.fieldCursor = 0
+}
+
+// openAdoptCandidates opens the picker for a project with several local clones.
+func (m *model) openAdoptCandidates(state app.ProjectState) {
+	m.adoptName = state.Name
+	m.adoptCandidates = state.Candidates
+	m.menuCursor = 0
+	m.screen = screenAdoptCandidates
+}
+
+// adoptCandidatesKey drives the discovered-clone picker: pick one path to link.
+func (m model) adoptCandidatesKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "esc", "q":
+		m.screen = screenProjects
+	case "up", "k":
+		m.menuCursor = max(0, m.menuCursor-1)
+	case "down", "j":
+		m.menuCursor = min(max(0, len(m.adoptCandidates)-1), m.menuCursor+1)
+	case "enter":
+		if len(m.adoptCandidates) == 0 {
+			return m, nil
+		}
+		path := m.adoptCandidates[m.menuCursor]
+		m.adoptPath = path
+		m.busy = true
+		m.screen = screenProjects
+		return m, linkAdoptCmd(m.cfg, m.adoptName, path)
+	}
+	return m, nil
 }
 
 func (m model) syncVault(push bool) (tea.Model, tea.Cmd) {

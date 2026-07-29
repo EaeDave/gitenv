@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/eaedave/gitenv/internal/app"
 	gitops "github.com/eaedave/gitenv/internal/git"
@@ -39,6 +41,14 @@ func run(args []string) error {
 		return deviceCommand(args[1:])
 	case "link":
 		return linkCommand(args[1:])
+	case "projects":
+		return projectsCommand()
+	case "adopt":
+		return adoptCommand(args[1:])
+	case "discover":
+		return discoverCommand()
+	case "set":
+		return setCommand(args[1:])
 	case "capture":
 		return captureCommand(args[1:])
 	case "apply", "switch":
@@ -108,7 +118,11 @@ Usage:
   gitenv device request <device-name>
   gitenv device approve <request-id>
   gitenv device activate <request-id>
-  gitenv link <project> <project-directory>
+  gitenv link <project> <project-directory> [--env-file <relative/path>] [--line-endings <preserve|native|lf|crlf>]
+  gitenv set <project> --env-file <relative/path> | --line-endings <preserve|native|lf|crlf>
+  gitenv projects
+  gitenv adopt <project> [directory] [--profile <name>]
+  gitenv discover
   gitenv capture <project> <profile>
   gitenv switch <project> <profile> [--force]
   gitenv status
@@ -160,7 +174,7 @@ func cloneCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := gitops.Clone(args[0], root); err != nil {
+	if err := gitops.Clone(context.Background(), args[0], root); err != nil {
 		return err
 	}
 	if _, err := vault.LoadManifest(root); err != nil {
@@ -242,8 +256,19 @@ func deviceCommand(args []string) error {
 }
 
 func linkCommand(args []string) error {
+	envFile, args, hasEnvFile, err := extractFlag(args, "--env-file")
+	if err != nil {
+		return err
+	}
+	lineEndings, args, hasLineEndings, err := extractFlag(args, "--line-endings")
+	if err != nil {
+		return err
+	}
+	if err := rejectUnknownFlags(args); err != nil {
+		return err
+	}
 	if len(args) != 2 {
-		return errors.New("usage: gitenv link <project> <project-directory>")
+		return errors.New("usage: gitenv link <project> <project-directory> [--env-file <relative/path>] [--line-endings <preserve|native|lf|crlf>]")
 	}
 	cfg, err := configured()
 	if err != nil {
@@ -255,7 +280,31 @@ func linkCommand(args []string) error {
 	if err := vault.SaveLocal(cfg); err != nil {
 		return err
 	}
+	if hasEnvFile {
+		if err := app.SetProjectEnvFile(cfg, args[0], envFile); err != nil {
+			return err
+		}
+	}
+	if hasLineEndings {
+		policy, err := vault.ParseLineEndingPolicy(lineEndings)
+		if err != nil {
+			return err
+		}
+		if err := app.SetProjectLineEndings(cfg, args[0], policy); err != nil {
+			return err
+		}
+	}
+	// Record the directory's origin remote now, not at capture time: the
+	// canonical identity is what lets another machine find or clone this
+	// project, and a project linked without it stays undiscoverable.
+	recorded, err := app.TryAttachRepository(cfg, args[0])
+	if err != nil {
+		return err
+	}
 	fmt.Printf("Linked %s -> %s\n", args[0], cfg.Projects[args[0]].Path)
+	if !recorded {
+		fmt.Println("No origin remote found; this project cannot be cloned on another computer until you add one and run gitenv link again.")
+	}
 	return nil
 }
 
@@ -368,5 +417,207 @@ func configured() (vault.LocalConfig, error) {
 	if cfg.VaultPath == "" {
 		return vault.LocalConfig{}, errors.New("no vault configured; run gitenv init or gitenv clone")
 	}
+	// Upgrade a v2 vault to v3 before any manifest read, from whichever CLI
+	// command resolved the vault. The rewrite dirties gitenv.json, so tell the
+	// user to publish it.
+	changed, err := app.EnsureVaultUpgraded(cfg)
+	if err != nil {
+		return vault.LocalConfig{}, err
+	}
+	if changed {
+		fmt.Println("Vault upgraded to the latest format; run gitenv push to publish it.")
+	}
 	return cfg, nil
+}
+
+func projectsCommand() error {
+	cfg, err := configured()
+	if err != nil {
+		return err
+	}
+	manifest, err := vault.LoadManifest(cfg.VaultPath)
+	if err != nil {
+		return err
+	}
+	statuses, err := collectStatuses(cfg, manifest)
+	if err != nil {
+		return err
+	}
+	for _, state := range app.ProjectStates(cfg, manifest, statuses) {
+		// Show where the project lives locally, falling back to the recorded
+		// repository identity for projects that have no clone on this machine.
+		location := state.Path
+		if location == "" {
+			location = state.Identity
+		}
+		if location == "" {
+			location = "-"
+		}
+		profile := state.ActiveProfile
+		if profile == "" {
+			profile = "-"
+		}
+		fmt.Printf("%-24s %-10s %-40s %s\n", state.Name, state.Kind, location, profile)
+	}
+	return nil
+}
+
+func adoptCommand(args []string) error {
+	profile, args, _, err := extractFlag(args, "--profile")
+	if err != nil {
+		return err
+	}
+	if err := rejectUnknownFlags(args); err != nil {
+		return err
+	}
+	if len(args) < 1 || len(args) > 2 {
+		return errors.New("usage: gitenv adopt <project> [directory] [--profile <name>]")
+	}
+	cfg, err := configured()
+	if err != nil {
+		return err
+	}
+	name := args[0]
+	if len(args) == 2 {
+		if err := app.AdoptProject(&cfg, name, args[1], profile); err != nil {
+			return err
+		}
+		fmt.Printf("Adopted %s -> %s\n", name, cfg.Projects[name].Path)
+		return nil
+	}
+	dest := app.SuggestCloneDest(cfg, name)
+	fmt.Printf("Cloning %s into %s\n", name, dest)
+	// A CLI may legitimately block on the network, so no timeout is imposed.
+	outcome, err := app.CloneAndAdopt(context.Background(), &cfg, name, dest, profile)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Adopted %s via %s (%s) -> %s\n", name, outcome.Method, outcome.URL, cfg.Projects[name].Path)
+	return nil
+}
+
+func discoverCommand() error {
+	cfg, err := configured()
+	if err != nil {
+		return err
+	}
+	found, err := app.RunDiscovery(context.Background(), &cfg)
+	if err != nil {
+		return err
+	}
+	identities := make([]string, 0, len(found))
+	for identity := range found {
+		identities = append(identities, identity)
+	}
+	sort.Strings(identities)
+	total := 0
+	for _, identity := range identities {
+		fmt.Println(identity)
+		for _, path := range found[identity] {
+			fmt.Printf("  %s\n", path)
+		}
+		total += len(found[identity])
+	}
+	fmt.Printf("%d repositories found across %d identities; results are cached for the TUI.\n", total, len(identities))
+	return nil
+}
+
+func setCommand(args []string) error {
+	envFile, args, hasEnvFile, err := extractFlag(args, "--env-file")
+	if err != nil {
+		return err
+	}
+	lineEndings, args, hasLineEndings, err := extractFlag(args, "--line-endings")
+	if err != nil {
+		return err
+	}
+	if err := rejectUnknownFlags(args); err != nil {
+		return err
+	}
+	if len(args) != 1 || (!hasEnvFile && !hasLineEndings) {
+		return errors.New("usage: gitenv set <project> --env-file <relative/path> | --line-endings <preserve|native|lf|crlf>")
+	}
+	cfg, err := configured()
+	if err != nil {
+		return err
+	}
+	name := args[0]
+	if hasEnvFile {
+		if err := app.SetProjectEnvFile(cfg, name, envFile); err != nil {
+			return err
+		}
+		fmt.Printf("Set env file for %s: %s\n", name, envFile)
+	}
+	if hasLineEndings {
+		policy, err := vault.ParseLineEndingPolicy(lineEndings)
+		if err != nil {
+			return err
+		}
+		if err := app.SetProjectLineEndings(cfg, name, policy); err != nil {
+			return err
+		}
+		fmt.Printf("Set line endings for %s: %s\n", name, policy)
+	}
+	return nil
+}
+
+// collectStatuses computes the vault.Status of every project the vault knows or
+// this machine links, keyed by name for app.ProjectStates.
+func collectStatuses(cfg vault.LocalConfig, manifest vault.Manifest) (map[string]string, error) {
+	statuses := make(map[string]string, len(manifest.Projects)+len(cfg.Projects))
+	record := func(name string) error {
+		if _, ok := statuses[name]; ok {
+			return nil
+		}
+		state, err := vault.Status(cfg, name)
+		if err != nil {
+			return err
+		}
+		statuses[name] = state
+		return nil
+	}
+	for name := range manifest.Projects {
+		if err := record(name); err != nil {
+			return nil, err
+		}
+	}
+	for name := range cfg.Projects {
+		if err := record(name); err != nil {
+			return nil, err
+		}
+	}
+	return statuses, nil
+}
+
+// extractFlag pulls a "--name value" pair out of args, returning the value, the
+// remaining args, and whether it was present. Flag parsing here is hand-rolled
+// to stay dependency-free, mirroring applyCommand's --force scan.
+func extractFlag(args []string, name string) (string, []string, bool, error) {
+	rest := make([]string, 0, len(args))
+	value := ""
+	found := false
+	for i := 0; i < len(args); i++ {
+		if args[i] == name {
+			if i+1 >= len(args) {
+				return "", nil, false, fmt.Errorf("%s requires a value", name)
+			}
+			value = args[i+1]
+			found = true
+			i++
+			continue
+		}
+		rest = append(rest, args[i])
+	}
+	return value, rest, found, nil
+}
+
+// rejectUnknownFlags fails on any leftover argument that looks like a flag, so a
+// mistyped flag surfaces as a clear error instead of a silent positional.
+func rejectUnknownFlags(args []string) error {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--") {
+			return fmt.Errorf("unknown flag %q", arg)
+		}
+	}
+	return nil
 }

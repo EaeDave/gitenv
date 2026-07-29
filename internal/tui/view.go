@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/eaedave/gitenv/internal/app"
 	gitops "github.com/eaedave/gitenv/internal/git"
 )
 
@@ -74,6 +75,14 @@ func (m model) renderScreen(width int) string {
 		return m.renderProjects(width)
 	case screenProfiles:
 		return m.renderProfiles(width)
+	case screenAdoptClone:
+		return m.renderAdoptClone(width)
+	case screenAdoptLink:
+		return m.renderAdoptLink(width)
+	case screenAdoptCandidates:
+		return m.renderAdoptCandidates(width)
+	case screenProjectOptions:
+		return m.renderProjectOptions(width)
 	case screenConfirm:
 		return m.renderConfirmation("Discard local changes?", fmt.Sprintf("Local .env has uncaptured content.\nApply %q and discard it? [y/N]", m.pendingProfile), width)
 	case screenConfirmDelete:
@@ -193,7 +202,7 @@ func (m model) renderProjects(width int) string {
 	} else {
 		workspace = lipgloss.JoinVertical(lipgloss.Left, renderPanel("Workspace", workspace, width, false), "", renderPanel("Projects", projectList, width, true))
 	}
-	help := renderHelp("enter", "profiles", "v", "view changes", "s", "sync", "c", "capture", "a", "add", "g", "remote", "r", "reload", "q", "quit")
+	help := renderHelp("enter", "open", "d", "scan", "o", "options", "v", "changes", "s", "sync", "c", "capture", "a", "add", "g", "remote", "r", "reload", "q", "quit")
 	return lipgloss.JoinVertical(lipgloss.Left, workspace, "", syncPanel, "", help)
 }
 
@@ -208,26 +217,11 @@ func (m model) renderProjectContext() string {
 	if len(badges) == 0 {
 		badges = append(badges, styles.muted.Render("○ no local .env link"))
 	}
-	return labelValue("Vault", m.cfg.VaultPath) + "\n" + labelValue("Current", m.current.Path) + "\n\n" + strings.Join(badges, "  ")
-}
-
-func (m model) renderProjectList() string {
-	if len(m.projects) == 0 {
-		return styles.muted.Render("No projects linked on this computer.\nPress a in a directory with .env.")
+	lines := labelValue("Vault", m.cfg.VaultPath) + "\n" + labelValue("Current", m.current.Path) + "\n" + labelValue("Workspace", app.WorkspaceRoot(*m.cfg))
+	if m.cfg.Discovery != nil && !m.cfg.Discovery.ScannedAt.IsZero() {
+		lines += "\n" + labelValue("Scanned", m.cfg.Discovery.ScannedAt.Local().Format("2006-01-02 15:04"))
 	}
-	rows := make([]string, 0, len(m.projects))
-	for index, name := range m.projects {
-		active := m.cfg.Projects[name].ActiveProfile
-		if active == "" {
-			active = "(none)"
-		}
-		row := fmt.Sprintf("  %-18s %-12s %s", name, active, renderStatus(m.statuses[name]))
-		if index == m.projectCursor {
-			row = styles.selected.Render("› "+name) + "  " + styles.muted.Render(active) + "  " + renderStatus(m.statuses[name])
-		}
-		rows = append(rows, row)
-	}
-	return strings.Join(rows, "\n")
+	return lines + "\n\n" + strings.Join(badges, "  ")
 }
 
 func (m model) renderProfiles(width int) string {

@@ -29,8 +29,10 @@ func TestNormalizeRemoteURL(t *testing.T) {
 		// Credentials stripped
 		{"https user:pass", "https://user:secret@github.com/owner/repo.git", "github.com/owner/repo"},
 		{"https token only", "https://mytoken@github.com/owner/repo.git", "github.com/owner/repo"},
-		// Case-insensitive host
-		{"uppercase host", "https://GitHub.COM/Owner/Repo.git", "github.com/Owner/Repo"},
+		// Case folding: host and path both fold, so the same hosted repository
+		// always yields one comparison key across machines.
+		{"uppercase host", "https://GitHub.COM/Owner/Repo.git", "github.com/owner/repo"},
+		{"uppercase scp-like path", "git@github.com:EaeDave/App.git", "github.com/eaedave/app"},
 		// Port in URL
 		{"https with port", "https://github.com:443/owner/repo.git", "github.com/owner/repo"},
 		{"https with custom port", "https://git.example.com:8443/owner/repo.git", "git.example.com:8443/owner/repo"},

@@ -258,7 +258,7 @@ func TestLoadAutoLinksExactRemoteWithoutApplyingProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest.Projects["api"] = vault.Project{Repositories: []string{"github.com/acme/api"}, Profiles: map[string]vault.Profile{"dev": {}}}
+	manifest.Projects["api"] = vault.Project{Repositories: []vault.Repository{{Identity: "github.com/acme/api"}}, Profiles: map[string]vault.Profile{"dev": {}}}
 	if err := vault.SaveManifest(vaultPath, manifest); err != nil {
 		t.Fatal(err)
 	}
@@ -479,11 +479,12 @@ func TestProjectViewAdaptsBetweenWideAndCompactLayouts(t *testing.T) {
 		},
 	}
 	m := model{
-		cfg:      &cfg,
-		screen:   screenProjects,
-		projects: []string{"api"},
-		statuses: map[string]string{"api": "clean"},
-		current:  app.CurrentProject{Path: "/workspace/api", HasEnv: true, LinkedName: "api"},
+		cfg:           &cfg,
+		screen:        screenProjects,
+		projects:      []string{"api"},
+		projectStates: []app.ProjectState{{Name: "api", Kind: app.ProjectLinked, Path: "/workspace/api", ActiveProfile: "dev", Status: "clean"}},
+		statuses:      map[string]string{"api": "clean"},
+		current:       app.CurrentProject{Path: "/workspace/api", HasEnv: true, LinkedName: "api"},
 	}
 
 	m.width = 108
@@ -500,7 +501,7 @@ func TestProjectViewAdaptsBetweenWideAndCompactLayouts(t *testing.T) {
 	if compactProjectsLine == compactWorkspaceLine {
 		t.Fatalf("compact layout did not stack panels:\n%s", compact)
 	}
-	for _, text := range []string{"api", "dev", "clean", ".env found", "linked: api"} {
+	for _, text := range []string{"api", "/workspace/api", ".env found", "linked: api"} {
 		if !strings.Contains(wide, text) || !strings.Contains(compact, text) {
 			t.Fatalf("responsive view lost %q", text)
 		}
@@ -537,7 +538,7 @@ func TestSyncPanelSeparatesEnvironmentAndRemoteState(t *testing.T) {
 		syncStatus:       gitops.SyncStatus{State: gitops.SyncRemoteAhead, Behind: 2},
 	}
 	view := m.View()
-	for _, text := range []string{"clean", "Sync", "↓ 2 remote update(s)", "Press s to download", "Local .env files"} {
+	for _, text := range []string{"Sync", "↓ 2 remote update(s)", "Press s to download", "Local .env files"} {
 		if text == "Local .env files" {
 			continue
 		}

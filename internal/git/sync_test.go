@@ -110,10 +110,10 @@ func setupSyncRepositories(t *testing.T) (string, string) {
 	commitAndPushFile(t, seed, "manifest.json", "{}\n", "initial")
 	local := filepath.Join(temp, "local")
 	peer := filepath.Join(temp, "peer")
-	if err := Clone(remote, local); err != nil {
+	if err := Clone(context.Background(), remote, local); err != nil {
 		t.Fatal(err)
 	}
-	if err := Clone(remote, peer); err != nil {
+	if err := Clone(context.Background(), remote, peer); err != nil {
 		t.Fatal(err)
 	}
 	configureIdentity(t, local)

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -57,7 +58,7 @@ func CloneLockedVault(cfg *vault.LocalConfig, remoteURL, root string) error {
 		return err
 	}
 	if _, err := os.Stat(filepath.Join(absolute, "gitenv.json")); errors.Is(err, os.ErrNotExist) {
-		if err := gitops.Clone(remoteURL, absolute); err != nil {
+		if err := gitops.Clone(context.Background(), remoteURL, absolute); err != nil {
 			return err
 		}
 	} else if err != nil {

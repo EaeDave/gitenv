@@ -4,32 +4,61 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/eaedave/gitenv/internal/vault"
 )
 
-// ReadLocalEnv returns the exact bytes of a linked project's local .env, or nil
-// when the file does not exist yet.
+// localEnvPath resolves a linked project's managed env file to an absolute host
+// path, honoring a per-project EnvFile instead of a hardcoded ".env".
+//
+// With no vault configured there is no project metadata to consult, so the
+// managed file is the default env file. That is a defined state, not a failure:
+// a manifest that exists but cannot be read still surfaces its error, because
+// silently defaulting there could write to the wrong file.
+func localEnvPath(cfg vault.LocalConfig, project string, local vault.LocalProject) (string, error) {
+	if cfg.VaultPath == "" {
+		return vault.EnvPath(local, vault.Project{})
+	}
+	manifest, err := vault.LoadManifest(cfg.VaultPath)
+	if err != nil {
+		return "", err
+	}
+	entry, err := vault.ProjectEntry(manifest, project)
+	if err != nil {
+		return "", err
+	}
+	return vault.EnvPath(local, entry)
+}
+
+// ReadLocalEnv returns the exact bytes of a linked project's local env file, or
+// nil when the file does not exist yet.
 func ReadLocalEnv(cfg vault.LocalConfig, project string) ([]byte, error) {
 	local, ok := cfg.Projects[project]
 	if !ok {
 		return nil, fmt.Errorf("project %q is not linked on this computer", project)
 	}
-	data, err := os.ReadFile(filepath.Join(local.Path, ".env"))
+	path, err := localEnvPath(cfg, project, local)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	return data, err
 }
 
-// WriteLocalEnv writes bytes verbatim to a linked project's local .env.
+// WriteLocalEnv writes bytes verbatim to a linked project's local env file.
 func WriteLocalEnv(cfg vault.LocalConfig, project string, data []byte) error {
 	local, ok := cfg.Projects[project]
 	if !ok {
 		return fmt.Errorf("project %q is not linked on this computer", project)
 	}
-	return vault.WriteAtomic(filepath.Join(local.Path, ".env"), data, 0o600)
+	path, err := localEnvPath(cfg, project, local)
+	if err != nil {
+		return err
+	}
+	return vault.WriteAtomic(path, data, 0o600)
 }
 
 // ReadActiveProfileEnv decrypts the bytes of a project's active profile so the

@@ -7,11 +7,19 @@ import (
 
 // NormalizeRemoteURL returns the canonical repository identity for a Git
 // remote URL. SSH (scp-like and ssh://), HTTPS, HTTP and git:// URLs all
-// reduce to "host/path", lower-cased, with credentials, .git suffix, and
+// reduce to "host[:port]/path", lower-cased, with credentials, .git suffix, and
 // trailing slashes removed. Returns "" for unrecognized or empty input.
 //
-// Two remote URLs that point to the same hosted repository always return
-// the same non-empty string, so callers can compare with ==.
+// Two remote URLs that point to the same hosted repository always return the
+// same non-empty string, so callers can compare with ==.
+//
+// The path is lower-cased along with the host because every major forge treats
+// owner/repo case-insensitively: one machine configured with
+// "git@github.com:EaeDave/app.git" and another with
+// "https://github.com/eaedave/app.git" hold the same repository and must match,
+// otherwise a project is never recognized on a freshly set up computer. The
+// consequence is that this value is a comparison key, not a clone URL — the
+// case-accurate URL is stored separately as Repository.CloneURL.
 func NormalizeRemoteURL(rawURL string) string {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
@@ -65,7 +73,7 @@ func NormalizeRemoteURL(rawURL string) string {
 		return ""
 	}
 
-	return strings.ToLower(host) + "/" + path
+	return strings.ToLower(host + "/" + path)
 }
 func isDefaultGitPort(scheme, port string) bool {
 	return (scheme == "ssh" && port == "22") ||
