@@ -18,10 +18,24 @@ func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if key.String() == "ctrl+c" {
 		return m, tea.Quit
 	}
+	// `U` stays the self-update key. It is safe to keep next to nothing now:
+	// the old lowercase `u` (publish vault) has been removed, so a slipped
+	// shift can no longer turn "publish my vault" into "replace the binary and
+	// relaunch". Explicit pull/push live in the sync actions menu instead.
 	if key.String() == "U" && m.updateAvailable && !m.updating {
 		switch m.screen {
 		case screenOnboarding, screenProjects, screenProfiles:
 			return m.beginSelfUpdate()
+		}
+	}
+	// `?` opens the full keymap and glossary for the screen it was pressed on.
+	// Forms are excluded because there `?` is literal text.
+	if key.String() == "?" {
+		switch m.screen {
+		case screenProjects, screenProfiles, screenSyncDiff, screenDevices, screenDiverged:
+			m.helpReturn = m.screen
+			m.screen = screenHelp
+			return m, nil
 		}
 	}
 	switch m.screen {
@@ -30,6 +44,7 @@ func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case screenCreate, screenClone, screenAddProject, screenNewProfile,
 		screenRemoteChange, screenMigrate, screenUnlockPassword,
 		screenEnrollRequest, screenImportRecovery, screenRecovery,
+		screenRecoveryPrompt,
 		screenAdoptClone, screenAdoptLink, screenProjectOptions:
 		return m.formKey(key)
 	case screenProjects:
@@ -64,6 +79,20 @@ func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.editorKey(key)
 	case screenConfirmEditorDiscard:
 		return m.confirmEditorDiscardKey(key)
+	case screenDevices:
+		return m.devicesKey(key)
+	case screenConfirmApprove:
+		return m.confirmApproveKey(key)
+	case screenDiverged:
+		return m.divergedKey(key)
+	case screenDivergedProfiles:
+		return m.divergedProfilesKey(key)
+	case screenConfirmDiverged:
+		return m.confirmDivergedKey(key)
+	case screenSyncActions:
+		return m.syncActionsKey(key)
+	case screenHelp:
+		return m.helpKey(key)
 	}
 	return m, nil
 }
@@ -133,14 +162,32 @@ func (m model) cancelForm() (tea.Model, tea.Cmd) {
 			m.screen = screenUnlock
 			m.fields = nil
 		case screenMigrate:
-			m.errText = "migration is required before the vault can be used"
+			// Migration cannot be skipped, so cancelling returns to the unlock
+			// menu, where "Disconnect this vault" is a real way out. Previously
+			// this printed an error and left the user on a screen whose own help
+			// line promised esc would cancel.
+			m.screen = screenUnlock
+			m.menuCursor = 0
+			m.fields = nil
+			m.info = "migration postponed — the vault stays locked until it is migrated"
 		}
 		return m, nil
 	}
 	switch m.screen {
-	case screenAdoptClone, screenAdoptLink, screenProjectOptions:
+	case screenAdoptClone, screenAdoptLink:
 		m.screen = screenProjects
 		m.fields = nil
+		return m, nil
+	case screenProjectOptions:
+		m.screen = m.optionsReturnScreen()
+		m.fields = nil
+		return m, nil
+	case screenRecoveryPrompt:
+		// Skipping the recovery backup is allowed, but the header keeps warning
+		// until a key has actually been exported.
+		m.screen = screenProjects
+		m.fields = nil
+		m.errText = "no recovery key saved — press b to save one; without it a forgotten password is unrecoverable"
 		return m, nil
 	}
 	if m.screen == screenRemoteChange {
@@ -214,9 +261,13 @@ func (m model) submitFormValues(values []string) (tea.Model, tea.Cmd) {
 	case screenEnrollRequest:
 		return m.submitEnrollment(values[0])
 	case screenImportRecovery:
-		return m, opCmd(func() error { return app.ImportIdentityValue(values[0]) }, "recovery identity imported")
-	case screenRecovery:
-		return m, opCmd(func() error { return app.ExportIdentity(values[0]) }, "recovery identity exported")
+		cfg := m.cfg
+		return m, opCmd(func() error { return app.ImportRecoveryKey(cfg, values[0]) }, "recovery key accepted")
+	case screenRecovery, screenRecoveryPrompt:
+		cfg := m.cfg
+		return m, opCmd(func() error {
+			return app.ExportRecoveryKey(cfg, values[0])
+		}, "recovery key saved — keep it somewhere other than this computer")
 	case screenAdoptClone:
 		if values[0] == "" {
 			m.busy = false
@@ -264,11 +315,13 @@ func (m model) submitProject(projectName, profileName string) (tea.Model, tea.Cm
 func (m model) submitEnrollment(deviceName string) (tea.Model, tea.Cmd) {
 	cfg := m.cfg
 	return m, func() tea.Msg {
-		request, err := app.RequestDeviceEnrollment(cfg, deviceName)
-		if err != nil {
+		if _, err := app.RequestDeviceEnrollment(cfg, deviceName); err != nil {
 			return operationMsg{err: err}
 		}
-		return operationMsg{info: "enrollment requested — ID: " + request.ID}
+		// The request id is deliberately not shown. It is stored locally and
+		// the approving computer now finds the request by itself, so making the
+		// user copy a 32-character hex string between machines is pure friction.
+		return operationMsg{info: "approval requested — open gitenv on an enrolled computer and approve this device"}
 	}
 }
 
@@ -286,10 +339,12 @@ func (m model) projectsKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.openAddProject()
 	case "c":
 		return m.captureSelectedProject()
-	case "p":
-		return m.syncVault(false)
-	case "u":
-		return m.syncVault(true)
+	case "f":
+		// Find local clones. This was `d` for one release; `d` means "remove"
+		// on the profiles screen and "discard" in the diff viewer, so reusing it
+		// for a scan made one letter mean three things, two of them destructive.
+		m.busy = true
+		return m, discoverCmd(m.cfg)
 	case "s":
 		return m.requestContextualSync()
 	case "v":
@@ -301,16 +356,15 @@ func (m model) projectsKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "b":
 		home, _ := os.UserHomeDir()
 		m.screen = screenRecovery
-		m.fields = []field{{"Recovery backup path", filepath.Join(home, "gitenv-recovery.txt"), false}}
+		m.fields = []field{{"Recovery key file", filepath.Join(home, "gitenv-recovery.txt"), false}}
 		m.fieldCursor = 0
+	case "D":
+		m.screen, m.menuCursor, m.approvalCursor = screenDevices, 0, 0
+	case "o":
+		m.openProjectOptions()
 	case "r":
 		m.syncStatus.State = gitops.SyncChecking
 		return m, tea.Batch(loadCmd(m.cfg, m.cwd), inspectSyncCmd(m.cfg))
-	case "d":
-		m.busy = true
-		return m, discoverCmd(m.cfg)
-	case "o":
-		m.openProjectOptions()
 	}
 	return m, nil
 }
@@ -441,17 +495,43 @@ func (m *model) openProjectOptions() {
 	if !ok {
 		return
 	}
+	m.openProjectOptionsState(state)
+}
+
+// openProjectOptionsFor opens the options form for a project addressed by name,
+// so the profiles screen can reach it without the project list being visible.
+func (m *model) openProjectOptionsFor(name string) {
+	state, ok := m.projectStateByName(name)
+	if !ok {
+		m.errText = "project options are unavailable until the vault finishes loading"
+		return
+	}
+	m.openProjectOptionsState(state)
+}
+
+func (m *model) openProjectOptionsState(state app.ProjectState) {
 	envFile := state.EnvFile
 	if envFile == "" {
 		envFile = vault.DefaultEnvFile
 	}
 	m.adoptName = state.Name
+	m.optionsReturn = m.screen
 	m.screen = screenProjectOptions
 	m.fields = []field{
 		{"Env file", envFile, false},
 		{"Line endings", state.LineEndings.String(), false},
 	}
 	m.fieldCursor = 0
+}
+
+// optionsReturnScreen is the screen the project options form returns to. It is
+// the profiles screen when options were opened from inside a project, so saving
+// or cancelling does not eject the user out to the project list.
+func (m model) optionsReturnScreen() screen {
+	if m.optionsReturn == screenProfiles && m.selectedProject != "" {
+		return screenProfiles
+	}
+	return screenProjects
 }
 
 // openAdoptClone opens the clone-and-adopt form for a project with a recorded
@@ -502,18 +582,6 @@ func (m model) adoptCandidatesKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) syncVault(push bool) (tea.Model, tea.Cmd) {
-	if !app.HasRemote(*m.cfg) {
-		m.errText = "configure a vault sync repository first with g"
-		return m, nil
-	}
-	m.busy = true
-	if push {
-		return m, opCmd(func() error { return app.Push(*m.cfg) }, "vault pushed")
-	}
-	return m, opCmd(func() error { return app.Pull(*m.cfg) }, "vault pulled; local .env files unchanged")
-}
-
 func (m model) remoteMenuKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "esc", "q":
@@ -532,7 +600,7 @@ func (m model) selectRemoteMenuItem() (tea.Model, tea.Cmd) {
 	switch m.menuCursor {
 	case 0:
 		m.screen = screenRemoteChange
-		m.fields = []field{{"Vault sync repository URL", m.remoteURL, false}}
+		m.fields = []field{{label: "Vault sync repository URL", value: m.remoteURL}}
 		m.fieldCursor = 0
 	case 1:
 		cfg := *m.cfg
@@ -549,7 +617,10 @@ func (m model) selectRemoteMenuItem() (tea.Model, tea.Cmd) {
 func (m model) unlockMenuKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "esc", "q":
-		m.errText = "unlock or disconnect the vault before continuing"
+		// A locked vault has nothing to go back to, so the honest exit is to
+		// leave. The help line says "quit" to match, instead of promising a
+		// "back" that only produced an error.
+		return m, tea.Quit
 	case "up", "k":
 		m.menuCursor = max(0, m.menuCursor-1)
 	case "down", "j":
@@ -584,7 +655,10 @@ func (m model) selectUnlockMenuItem() (tea.Model, tea.Cmd) {
 		m.fieldCursor = 0
 	case 2:
 		m.screen = screenImportRecovery
-		m.fields = []field{{"Recovery key", "", true}}
+		// Not masked: this is a long key pasted from a password manager, and
+		// asterisks only stop the user from noticing a truncated or mangled
+		// paste. Anyone who can read the screen now could read it there too.
+		m.fields = []field{{"Recovery key", "", false}}
 		m.fieldCursor = 0
 	case 3:
 		m.screen = screenConfirmDisconnect
@@ -633,6 +707,11 @@ func (m model) profilesKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.syncStatus.State = gitops.SyncChecking
 		return m, tea.Batch(loadCmd(m.cfg, m.cwd), inspectSyncCmd(m.cfg))
+	case "o":
+		// Reachable from here too: in focus mode the project list is hidden, so
+		// otherwise changing this project's env file meant leaving focus, finding
+		// the project in the list, and pressing o there.
+		m.openProjectOptionsFor(m.selectedProject)
 	}
 	return m, nil
 }

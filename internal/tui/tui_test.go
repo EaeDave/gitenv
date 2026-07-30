@@ -374,8 +374,11 @@ func TestUnlockMenuRouting(t *testing.T) {
 	if imp.screen != screenImportRecovery {
 		t.Fatalf("option 2 did not open screenImportRecovery; got %v", imp.screen)
 	}
-	if len(imp.fields) != 1 || imp.fields[0].label != "Recovery key" || !imp.fields[0].masked {
-		t.Fatalf("recovery paste field is not masked: %#v", imp.fields)
+	// Deliberately NOT masked. This field takes a long key pasted from a password
+	// manager; asterisks only hid a truncated or mangled paste, and anyone who
+	// could read the screen could read the manager it came from.
+	if len(imp.fields) != 1 || imp.fields[0].label != "Recovery key" || imp.fields[0].masked {
+		t.Fatalf("recovery paste field should be verifiable, not masked: %#v", imp.fields)
 	}
 
 	// Option 3 → explicit local disconnect confirmation.
@@ -386,20 +389,28 @@ func TestUnlockMenuRouting(t *testing.T) {
 	}
 }
 
+// TestAccessGateCannotBeBypassed pins the real invariant: a locked vault can
+// never be walked past into the app. Leaving (quit) is allowed, and the unlock
+// menu now says "quit" instead of promising a "back" that only printed an error.
 func TestAccessGateCannotBeBypassed(t *testing.T) {
 	cfg := vault.LocalConfig{VaultPath: "/vault", Projects: map[string]vault.LocalProject{}}
 	for _, key := range []tea.KeyMsg{{Type: tea.KeyEsc}, {Type: tea.KeyRunes, Runes: []rune{'q'}}} {
 		m := model{cfg: &cfg, screen: screenUnlock, accessRequired: true}
 		next, cmd := m.unlockMenuKey(key)
 		got := next.(model)
-		if cmd != nil || got.screen != screenUnlock {
-			t.Fatalf("locked %q bypassed access gate: screen=%v cmd=%v", key.String(), got.screen, cmd)
+		if cmd == nil {
+			t.Fatalf("locked %q neither stayed nor quit", key.String())
+		}
+		if got.screen != screenUnlock {
+			t.Fatalf("locked %q bypassed access gate into screen %v", key.String(), got.screen)
 		}
 	}
+	// Cancelling the migration form returns to the unlock menu, which offers a
+	// real way out. It must never reach the project list.
 	m := model{cfg: &cfg, screen: screenMigrate, accessRequired: true, fields: []field{{"Master password", "secret", true}}}
 	next, cmd := m.formKey(tea.KeyMsg{Type: tea.KeyEsc})
-	if got := next.(model); cmd != nil || got.screen != screenMigrate {
-		t.Fatalf("migration escape bypassed access gate: screen=%v cmd=%v", got.screen, cmd)
+	if got := next.(model); cmd != nil || got.screen != screenUnlock {
+		t.Fatalf("migration escape did not return to the locked menu: screen=%v cmd=%v", got.screen, cmd)
 	}
 	m = model{cfg: &cfg, screen: screenImportRecovery, accessRequired: true, migrationRecoveryRequired: true, fields: []field{{"Recovery key", "", true}}}
 	next, cmd = m.formKey(tea.KeyMsg{Type: tea.KeyEsc})
@@ -508,11 +519,35 @@ func TestProjectViewAdaptsBetweenWideAndCompactLayouts(t *testing.T) {
 	}
 }
 
+// TestStatusRenderingIncludesTextWithoutColor keeps the accessibility contract
+// (never colour alone) and adds the humanization one: the audit found raw
+// internal words like "unmanaged" and "unlinked" leaking to the screen, telling
+// the user nothing about what to do next.
 func TestStatusRenderingIncludesTextWithoutColor(t *testing.T) {
-	for _, status := range []string{"clean", "modified", "error", "unknown"} {
-		if rendered := renderStatus(status); !strings.Contains(rendered, status) {
-			t.Fatalf("status %q relies on color alone: %q", status, rendered)
+	human := map[string]string{
+		"clean":     "up to date",
+		"modified":  "uncaptured changes",
+		"missing":   "env file missing",
+		"unmanaged": "not captured yet",
+		"unlinked":  "no local copy",
+		"error":     "error",
+	}
+	for status, want := range human {
+		rendered := renderStatus(status)
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("status %q did not render as %q: %q", status, want, rendered)
 		}
+	}
+	// The two words the audit singled out as meaningless to a user must never
+	// reach the screen verbatim.
+	for _, jargon := range []string{"unmanaged", "unlinked"} {
+		if rendered := renderStatus(jargon); strings.Contains(rendered, jargon) {
+			t.Fatalf("status %q leaked its internal name to the user: %q", jargon, rendered)
+		}
+	}
+	// An unrecognized value still renders readable text rather than a bare glyph.
+	if rendered := renderStatus("something-new"); !strings.Contains(rendered, "something-new") {
+		t.Fatalf("unknown status relies on colour alone: %q", rendered)
 	}
 }
 
@@ -576,13 +611,35 @@ func TestContextualSyncRequiresConfirmation(t *testing.T) {
 
 func TestContextualSyncBlocksUnsafeStates(t *testing.T) {
 	cfg := vault.LocalConfig{VaultPath: "/vault"}
-	for _, state := range []gitops.SyncState{gitops.SyncDiverged, gitops.SyncOffline, gitops.SyncAuthError, gitops.SyncNoRemote} {
+	// Diverged is no longer in this list: it now opens the resolution flow
+	// instead of dead-ending. It still never syncs, which is asserted below.
+	for _, state := range []gitops.SyncState{gitops.SyncOffline, gitops.SyncAuthError, gitops.SyncNoRemote} {
 		m := model{cfg: &cfg, screen: screenProjects, syncStatus: gitops.SyncStatus{State: state}}
 		next, cmd := m.requestContextualSync()
 		got := next.(model)
 		if cmd != nil || got.screen != screenProjects || got.errText == "" {
 			t.Fatalf("unsafe state %q was not blocked: %#v cmd=%v", state, got, cmd)
 		}
+	}
+}
+
+// TestContextualSyncOnDivergedOpensResolution pins the replacement behaviour for
+// a diverged vault: the audit found it dead-ended with "automatic sync is
+// blocked" and no way forward inside the app. It must now inspect the
+// divergence, and it must still never pull or push on its own.
+func TestContextualSyncOnDivergedOpensResolution(t *testing.T) {
+	cfg := vault.LocalConfig{VaultPath: "/vault"}
+	m := model{cfg: &cfg, screen: screenProjects, syncStatus: gitops.SyncStatus{State: gitops.SyncDiverged}}
+	next, cmd := m.requestContextualSync()
+	got := next.(model)
+	if cmd == nil {
+		t.Fatal("diverged vault did not start divergence inspection")
+	}
+	if !got.busy {
+		t.Fatal("divergence inspection did not mark the model busy")
+	}
+	if got.screen == screenConfirmSync || got.pendingSync != "" {
+		t.Fatalf("diverged vault queued a sync instead of a resolution: %#v", got)
 	}
 }
 
@@ -1029,4 +1086,93 @@ func lineContaining(t *testing.T, text, fragment string) int {
 	}
 	t.Fatalf("view does not contain %q:\n%s", fragment, text)
 	return -1
+}
+
+// TestFormHintsStateRulesBeforeSubmit covers the audit finding that every form
+// constraint was enforced only after submit: the twelve-character master
+// password rule was never mentioned until it had already rejected the user.
+func TestFormHintsStateRulesBeforeSubmit(t *testing.T) {
+	cfg := vault.LocalConfig{VaultPath: "/vault"}
+	create := model{cfg: &cfg, screen: screenCreate, fields: []field{
+		{"Vault directory", "/vault", false},
+		{"Master password", "", true},
+		{"Confirm password", "", true},
+		{"Device name", "host", false},
+		{"Vault sync repository (optional)", "", false},
+	}}
+	hint := create.formHint()
+	if !strings.Contains(hint, "12 characters") {
+		t.Fatalf("create form does not state the password rule: %q", hint)
+	}
+	if view := create.View(); !strings.Contains(view, "12 characters") {
+		t.Fatalf("password rule is not rendered on the create screen:\n%s", view)
+	}
+
+	// Live confirmation feedback: no verdict until the second entry is started,
+	// then a truthful one either way.
+	if got := create.passwordMatchHint(); got != "" {
+		t.Fatalf("empty confirmation should give no verdict, got %q", got)
+	}
+	create.fields[1].value = "correct horse battery"
+	create.fields[2].value = "correct horse"
+	if got := create.passwordMatchHint(); !strings.Contains(got, "do not match") {
+		t.Fatalf("mismatched entries were not reported: %q", got)
+	}
+	create.fields[2].value = "correct horse battery"
+	if got := create.passwordMatchHint(); !strings.Contains(got, "match") || strings.Contains(got, "not match") {
+		t.Fatalf("matching entries were not confirmed: %q", got)
+	}
+
+	// Every screen that carries a rule must state it.
+	for _, tc := range []struct {
+		screen screen
+		want   string
+	}{
+		{screenImportRecovery, "AGE-SECRET-KEY-1"},
+		{screenProjectOptions, "apps/web/.env"},
+		{screenRecoveryPrompt, "other than this computer"},
+		{screenRemoteChange, "encrypted"},
+	} {
+		m := model{cfg: &cfg, screen: tc.screen}
+		if hint := m.formHint(); !strings.Contains(hint, tc.want) {
+			t.Fatalf("screen %v hint missing %q: %q", tc.screen, tc.want, hint)
+		}
+	}
+}
+
+// TestRecoveryBannerWarnsUntilBackupConfirmed pins the other half of that
+// finding: the recovery key was never offered at creation and its export key was
+// in no help line, so a user could run for months with no way back in.
+func TestRecoveryBannerWarnsUntilBackupConfirmed(t *testing.T) {
+	cfg := vault.LocalConfig{VaultPath: "/vault", Projects: map[string]vault.LocalProject{}}
+	m := model{cfg: &cfg, screen: screenProjects}
+	joined := strings.Join(m.renderBanners(), "\n")
+	if !strings.Contains(joined, "recovery key") {
+		t.Fatalf("no recovery warning while unconfirmed: %q", joined)
+	}
+	m.recoveryExported = true
+	if joined := strings.Join(m.renderBanners(), "\n"); strings.Contains(joined, "recovery key") {
+		t.Fatalf("recovery warning survived a confirmed backup: %q", joined)
+	}
+	// A locked vault must not advertise actions it cannot perform.
+	locked := model{cfg: &cfg, screen: screenUnlock, accessRequired: true}
+	if joined := strings.Join(locked.renderBanners(), "\n"); strings.Contains(joined, "recovery key") {
+		t.Fatalf("locked vault advertised the recovery action: %q", joined)
+	}
+}
+
+// TestPendingApprovalBannerPointsAtTheDevicesScreen covers the audit's worst
+// finding: an approving computer never learned a request was waiting.
+func TestPendingApprovalBannerPointsAtTheDevicesScreen(t *testing.T) {
+	cfg := vault.LocalConfig{VaultPath: "/vault", Projects: map[string]vault.LocalProject{}}
+	m := model{cfg: &cfg, screen: screenProjects, recoveryExported: true, pendingApprovals: []vault.EnrollmentRequest{
+		{ID: "req-1", Name: "laptop"},
+	}}
+	joined := strings.Join(m.renderBanners(), "\n")
+	if !strings.Contains(joined, "waiting for approval") || !strings.Contains(joined, "D") {
+		t.Fatalf("pending approval is not surfaced: %q", joined)
+	}
+	if strings.Contains(joined, "req-1") {
+		t.Fatalf("banner leaked a request id: %q", joined)
+	}
 }

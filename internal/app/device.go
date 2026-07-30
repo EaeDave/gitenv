@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"sort"
 
 	gitops "github.com/eaedave/gitenv/internal/git"
 	"github.com/eaedave/gitenv/internal/vault"
@@ -94,4 +95,34 @@ func manifestHasRecipient(manifest vault.Manifest, recipient string) bool {
 		}
 	}
 	return false
+}
+
+// PendingApprovals returns the enrollment requests waiting in the vault,
+// excluding the one this computer created, sorted oldest first. A computer is
+// never shown its own request as something to approve: doing so would let a
+// user believe they had authorized themselves, when approval can only come
+// from a device the vault already trusts.
+func PendingApprovals(cfg vault.LocalConfig, manifest vault.Manifest) []vault.EnrollmentRequest {
+	pending := make([]vault.EnrollmentRequest, 0, len(manifest.EnrollmentRequests))
+	for _, request := range manifest.EnrollmentRequests {
+		if request.ID == cfg.PendingEnrollmentID {
+			continue
+		}
+		pending = append(pending, request)
+	}
+	sort.Slice(pending, func(i, j int) bool {
+		return pending[i].CreatedAt.Before(pending[j].CreatedAt)
+	})
+	return pending
+}
+
+// EnrolledDevices returns the devices the vault already trusts, sorted by name
+// so the roster reads the same on every computer.
+func EnrolledDevices(manifest vault.Manifest) []vault.Device {
+	devices := make([]vault.Device, len(manifest.Devices))
+	copy(devices, manifest.Devices)
+	sort.Slice(devices, func(i, j int) bool {
+		return devices[i].Name < devices[j].Name
+	})
+	return devices
 }

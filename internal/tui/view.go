@@ -14,13 +14,41 @@ func (m model) View() string {
 	width := availableWidth(m.width)
 	body := m.renderScreen(width)
 	sections := []string{m.renderHeader(width), body}
-	if m.updateAvailable && !m.updating {
-		sections = append(sections, styles.warning.Render("↑ gitenv "+m.updateLatest+" available — press U to update"))
+	for _, banner := range m.renderBanners() {
+		sections = append(sections, banner)
 	}
 	if notice := m.renderNotice(); notice != "" {
 		sections = append(sections, notice)
 	}
 	return lipgloss.NewStyle().Padding(1, 2).Render(strings.Join(sections, "\n\n"))
+}
+
+// renderBanners are the standing notices that must not depend on the user
+// happening to visit the right screen: an available update, a device waiting for
+// approval, and a vault whose recovery key was never backed up.
+func (m model) renderBanners() []string {
+	banners := make([]string, 0, 3)
+	if m.updateAvailable && !m.updating {
+		banners = append(banners, styles.warning.Render("↑ gitenv "+m.updateLatest+" available — press U to update"))
+	}
+	if m.accessRequired || m.cfg.VaultPath == "" {
+		// While the vault is locked or absent these actions are unreachable, so
+		// advertising them would only be noise.
+		return banners
+	}
+	if count := len(m.pendingApprovals); count > 0 {
+		label := "a computer is waiting for approval"
+		if count > 1 {
+			label = fmt.Sprintf("%d computers are waiting for approval", count)
+		}
+		banners = append(banners, styles.warning.Render("● "+label+" — press D to review"))
+	}
+	if !m.recoveryExported {
+		// Worded as "not confirmed" rather than "none saved": a vault created
+		// before this was tracked may well have a backup we cannot see.
+		banners = append(banners, styles.warning.Render("● recovery key backup not confirmed on this computer — press b to save one"))
+	}
+	return banners
 }
 
 func (m model) renderHeader(width int) string {
@@ -71,6 +99,22 @@ func (m model) renderScreen(width int) string {
 		return m.renderForm("Paste recovery identity", width)
 	case screenRecovery:
 		return m.renderForm("Export recovery identity", width)
+	case screenRecoveryPrompt:
+		return m.renderRecoveryPrompt(width)
+	case screenDevices:
+		return m.renderDevices(width)
+	case screenConfirmApprove:
+		return m.renderConfirmApprove(width)
+	case screenDiverged:
+		return m.renderDiverged(width)
+	case screenDivergedProfiles:
+		return m.renderDivergedProfiles(width)
+	case screenConfirmDiverged:
+		return m.renderConfirmDiverged(width)
+	case screenSyncActions:
+		return m.renderSyncActions(width)
+	case screenHelp:
+		return m.renderHelpScreen(width)
 	case screenProjects:
 		return m.renderProjects(width)
 	case screenProfiles:
@@ -122,13 +166,69 @@ func (m model) renderOnboarding(width int) string {
 
 func (m model) renderForm(title string, width int) string {
 	panelWidth := min(width, 76)
-	rows := make([]string, 0, len(m.fields))
+	rows := make([]string, 0, len(m.fields)+2)
 	for index, field := range m.fields {
 		rows = append(rows, renderField(field, index == m.fieldCursor, panelWidth))
+	}
+	if hint := m.formHint(); hint != "" {
+		rows = append(rows, "", styles.muted.Render(hint))
 	}
 	panel := renderPanel(title, strings.Join(rows, "\n"), panelWidth, true)
 	help := renderHelp("tab", "next field", "enter", "confirm", "ctrl+u", "clear", "esc", "cancel")
 	return lipgloss.JoinVertical(lipgloss.Left, panel, "", help)
+}
+
+// formHint states a form's rules up front. Every constraint used to be enforced
+// only after submit: the twelve-character master password rule in particular was
+// never mentioned until it had already rejected the user's input.
+func (m model) formHint() string {
+	switch m.screen {
+	case screenCreate, screenMigrate:
+		return "Master password: at least 12 characters. " + m.passwordMatchHint()
+	case screenUnlockPassword:
+		return "The master password you chose when the vault was created."
+	case screenImportRecovery:
+		return "Paste the whole recovery key, including the AGE-SECRET-KEY-1 prefix."
+	case screenRecovery, screenRecoveryPrompt:
+		return "Store this file somewhere other than this computer — a password manager or an offline copy."
+	case screenProjectOptions:
+		return "Env file: a path inside the project, like .env or apps/web/.env. Line endings: preserve, native, lf or crlf."
+	case screenAdoptClone:
+		return "The repository will be cloned here, then linked and its env file written."
+	case screenAdoptLink:
+		return "An existing clone of this project on this computer."
+	case screenRemoteChange:
+		return "An empty private Git repository. Only encrypted files are ever pushed to it."
+	case screenEnrollRequest:
+		return "A name you will recognise on the computer that approves this one."
+	default:
+		return ""
+	}
+}
+
+// passwordMatchHint gives live feedback on the confirmation field instead of
+// making the user submit twice to learn the two entries differ.
+func (m model) passwordMatchHint() string {
+	first, second, found := "", "", 0
+	for _, field := range m.fields {
+		if !field.masked {
+			continue
+		}
+		switch found {
+		case 0:
+			first = field.value
+		case 1:
+			second = field.value
+		}
+		found++
+	}
+	if found < 2 || second == "" {
+		return ""
+	}
+	if first == second {
+		return "Both entries match."
+	}
+	return "The two entries do not match yet."
 }
 
 func renderField(field field, active bool, width int) string {
@@ -202,7 +302,10 @@ func (m model) renderProjects(width int) string {
 	} else {
 		workspace = lipgloss.JoinVertical(lipgloss.Left, renderPanel("Workspace", workspace, width, false), "", renderPanel("Projects", projectList, width, true))
 	}
-	help := renderHelp("enter", "open", "d", "scan", "o", "options", "v", "changes", "s", "sync", "c", "capture", "a", "add", "g", "remote", "r", "reload", "q", "quit")
+	// The help line carries the everyday actions only. The full keymap, plus the
+	// glossary the audit found missing, lives behind `?` — cramming fourteen
+	// bindings onto one line made none of them readable.
+	help := renderHelp("enter", "open", "c", "capture", "s", "sync", "v", "changes", "f", "find clones", "o", "options", "?", "help", "q", "quit")
 	return lipgloss.JoinVertical(lipgloss.Left, workspace, "", syncPanel, "", help)
 }
 
@@ -235,9 +338,9 @@ func (m model) renderProfiles(width int) string {
 		profiles = lipgloss.JoinVertical(lipgloss.Left, renderPanel(m.selectedProject, details, width, false), "", renderPanel("Profiles", profiles, width, true))
 	}
 	syncPanel := renderPanel("Sync", m.renderSyncStatus(), width, false)
-	help := renderHelp("enter", "apply", "e", "edit", "v", "changes", "s", "sync", "c", "capture", "n", "new", "d", "remove", "r", "reload", "p", "projects", "esc", "back")
+	help := renderHelp("enter", "apply", "e", "edit", "c", "capture", "n", "new", "d", "remove", "s", "sync", "o", "options", "?", "help", "esc", "back")
 	if m.isFocusedProject() {
-		help = renderHelp("enter", "apply", "e", "edit", "v", "changes", "s", "sync", "c", "capture", "n", "new", "d", "remove", "r", "reload", "p", "browse projects", "q", "quit")
+		help = renderHelp("enter", "apply", "e", "edit", "c", "capture", "n", "new", "d", "remove", "s", "sync", "o", "options", "?", "help", "p", "all projects", "q", "quit")
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, profiles, "", syncPanel, "", help)
 }
@@ -354,16 +457,26 @@ func renderMenu(items []string, cursor int) string {
 	return strings.Join(rows, "\n")
 }
 
+// renderStatus turns vault.Status's internal vocabulary into something a person
+// can read. The raw words leaked to the screen before: "unmanaged" and
+// "unlinked" told the user nothing about what to do next, and anything the
+// switch did not recognise was printed verbatim.
 func renderStatus(status string) string {
 	switch status {
 	case "clean", "synced":
-		return styles.success.Render("● " + status)
+		return styles.success.Render("● up to date")
 	case "modified", "dirty":
-		return styles.warning.Render("● " + status)
+		return styles.warning.Render("● uncaptured changes")
+	case "missing":
+		return styles.warning.Render("● env file missing")
+	case "unmanaged":
+		return styles.muted.Render("○ not captured yet")
+	case "unlinked":
+		return styles.muted.Render("○ no local copy")
 	case "error":
 		return styles.danger.Render("● error")
 	case "":
-		return styles.muted.Render("○ unknown")
+		return styles.muted.Render("○ checking")
 	default:
 		return styles.muted.Render("● " + status)
 	}
@@ -385,4 +498,36 @@ func inputCursor(active bool) string {
 		return "█"
 	}
 	return ""
+}
+
+// renderSyncActions lists what a user can still do with a vault that already
+// matches its remote, replacing the old dead-end "already synchronized" message.
+func (m model) renderSyncActions(width int) string {
+	body := styles.muted.Render("The vault and its remote already match.\nYou can still run either direction explicitly.") + "\n\n" +
+		renderMenu([]string{
+			"Download remote vault changes",
+			"Publish local vault changes",
+			"Back",
+		}, m.menuCursor)
+	panel := renderPanel("Sync", body, min(width, 76), true)
+	return lipgloss.JoinVertical(lipgloss.Left, panel, "", renderHelp("↑↓", "select", "enter", "confirm", "esc", "back"))
+}
+
+// renderRecoveryPrompt is the post-creation backup step. A new vault's key
+// exists in exactly one place, so this asks for a copy while it still matters
+// rather than leaving it to an undocumented key the user never presses.
+func (m model) renderRecoveryPrompt(width int) string {
+	panelWidth := min(width, 76)
+	intro := styles.warning.Render("Save your recovery key now.") + "\n" +
+		styles.muted.Render("It is the only way back into this vault if you forget the master\npassword and have no other enrolled computer. Nobody can restore it\nfor you.")
+	rows := []string{intro, ""}
+	for index, field := range m.fields {
+		rows = append(rows, renderField(field, index == m.fieldCursor, panelWidth))
+	}
+	if hint := m.formHint(); hint != "" {
+		rows = append(rows, "", styles.muted.Render(hint))
+	}
+	panel := renderPanel("Vault created", strings.Join(rows, "\n"), panelWidth, true)
+	help := renderHelp("enter", "save", "ctrl+u", "clear", "esc", "skip for now")
+	return lipgloss.JoinVertical(lipgloss.Left, panel, "", help)
 }

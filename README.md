@@ -87,20 +87,40 @@ profiles, sync with the remote, review changes, and edit `.env` files inline.
 
 ## TUI shortcuts
 
+Press `?` on any main screen for the complete keymap plus a glossary of the
+terms and status labels — the list below is only the everyday subset.
+
+Projects screen:
+
+```text
+enter   open the project, or adopt it onto this computer
+c       capture the .env into a profile
+s       sync with the remote (contextual)
+v       open the change viewer
+f       find local clones of vault projects
+o       project options (env file, line endings)
+b       save your recovery key
+D       devices and pending approvals
+a       add the current directory as a project
+g       sync repository settings
+?       full keymap and glossary
+r       reload        q  quit
+```
+
 Profiles screen:
 
 ```text
 enter   apply the selected profile
 e       edit the project's .env (inline editor)
-v       open the change viewer
-s       sync with the remote (contextual)
 c       capture the active profile
 n       create a new profile
 d       remove an inactive profile
-r       reload status
-U       update to a newer release (when available)
+s       sync with the remote (contextual)
+o       project options (env file, line endings)
+v       open the change viewer
+?       full keymap and glossary
 p       browse all projects (when focused on one)
-esc/q   back / quit
+r       reload        esc/q  back
 ```
 
 Change viewer:
@@ -115,6 +135,7 @@ esc/q             back
 ```
 
 Inline editor: `ctrl+s` save, `esc` cancel, `enter` new line.
+Everywhere: `ctrl+c` quits, `U` installs an offered update.
 
 ## CLI
 

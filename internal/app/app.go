@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	gitops "github.com/eaedave/gitenv/internal/git"
 	"github.com/eaedave/gitenv/internal/vault"
@@ -92,6 +93,38 @@ func CloneVault(cfg *vault.LocalConfig, remoteURL, root, recoveryPath string) er
 		cfg.Projects = map[string]vault.LocalProject{}
 	}
 	return vault.SaveLocal(*cfg)
+}
+
+// ExportRecoveryKey writes the vault's recovery identity to target and records
+// that this computer has confirmed a backup, so the interface stops warning
+// about it. Callers that only need the bytes on disk use ExportIdentity.
+func ExportRecoveryKey(cfg *vault.LocalConfig, target string) error {
+	if err := ExportIdentity(target); err != nil {
+		return err
+	}
+	return confirmRecoveryBackup(cfg)
+}
+
+// ImportRecoveryKey stores a pasted recovery identity and records that this
+// computer has confirmed a backup: a user who just typed the key in demonstrably
+// holds a copy, so nagging them to save one would be a false alarm.
+func ImportRecoveryKey(cfg *vault.LocalConfig, value string) error {
+	if err := ImportIdentityValue(value); err != nil {
+		return err
+	}
+	return confirmRecoveryBackup(cfg)
+}
+
+func confirmRecoveryBackup(cfg *vault.LocalConfig) error {
+	now := time.Now().UTC()
+	cfg.RecoveryExportedAt = &now
+	return vault.SaveLocal(*cfg)
+}
+
+// HasRecoveryBackup reports whether this computer has ever confirmed that a
+// recovery key exists, by exporting or importing one.
+func HasRecoveryBackup(cfg vault.LocalConfig) bool {
+	return cfg.RecoveryExportedAt != nil
 }
 
 func ExportIdentity(target string) error {

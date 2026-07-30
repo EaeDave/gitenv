@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -43,6 +45,14 @@ const (
 	screenEnrollRequest       // form: device name → RequestDeviceEnrollment
 	screenImportRecovery      // form: pasted recovery identity → ImportIdentityValue
 	screenRecovery            // form: export recovery identity (b key)
+	screenRecoveryPrompt      // form: export recovery identity, right after vault creation
+	screenDevices             // cursor menu: enrolled devices + pending approvals
+	screenConfirmApprove      // y/N: approve a pending device enrollment
+	screenDiverged            // cursor menu: how to resolve a diverged vault
+	screenDivergedProfiles    // cursor menu: per-profile choice for both-changed profiles
+	screenConfirmDiverged     // y/N: apply the chosen divergence resolution
+	screenSyncActions         // cursor menu: explicit pull / push on a synced vault
+	screenHelp                // full keymap + glossary for the originating screen
 	screenConfirmDisconnect
 	screenConfirm
 	screenConfirmDelete
@@ -76,6 +86,7 @@ type reloadMsg struct {
 	migrationIdentityMissing bool
 	needsUnlock              bool
 	upgraded                 bool // vault metadata was upgraded to v3 this load
+	recoveryExported         bool // a recovery key has been exported from this computer
 }
 
 type syncStatusMsg struct {
@@ -158,6 +169,24 @@ type model struct {
 	updateLatest                                           string
 	updateAvailable, updating                              bool
 	pendingRestart                                         string
+	// pendingApprovals holds device enrollment requests waiting in the vault,
+	// excluding this computer's own. Populated on every reload so the projects
+	// screen can say a device is waiting, instead of the request sitting
+	// invisible in the manifest until somebody reads it by hand.
+	pendingApprovals []vault.EnrollmentRequest
+	approvalCursor   int
+	// Divergence resolution state, built when the user opens screenDiverged.
+	diverged        *app.DivergenceReport
+	divergedChoices map[string]app.DivergenceChoice
+	divergedCursor  int
+	// recoveryExported records whether a recovery key was ever exported from
+	// this computer, so the header keeps warning until it has been.
+	recoveryExported bool
+	// helpReturn is the screen the in-app help was opened from; optionsReturn
+	// likewise for the project options form, which is now reachable from both
+	// the project list and a project's profiles screen.
+	helpReturn, optionsReturn screen
+	helpOffset                int
 }
 
 func newModel(cfg *vault.LocalConfig, cwd, version string) model {
@@ -181,8 +210,22 @@ func newModel(cfg *vault.LocalConfig, cwd, version string) model {
 	return m
 }
 
+// syncRefreshInterval is how often the sync panel re-checks the remote on its
+// own. Without this the panel showed whatever it found at launch until the user
+// pressed `r`, and a long-lived session quietly displayed stale information.
+const syncRefreshInterval = 90 * time.Second
+
+type syncRefreshTickMsg struct{}
+
+// syncRefreshTick schedules the next background sync check. The tick always
+// reschedules; whether it actually inspects the remote is decided on arrival, so
+// a busy or locked TUI never queues work it cannot use.
+func syncRefreshTick() tea.Cmd {
+	return tea.Tick(syncRefreshInterval, func(time.Time) tea.Msg { return syncRefreshTickMsg{} })
+}
+
 func (m model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.spinner.Tick}
+	cmds := []tea.Cmd{m.spinner.Tick, syncRefreshTick()}
 	if !update.Disabled() && update.IsRelease(m.version) {
 		cmds = append(cmds, checkUpdateCmd(m.version))
 	}
@@ -345,6 +388,34 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncStatus, m.syncInventory = msg.status, msg.inventory
 		return m, nil
 
+	case syncRefreshTickMsg:
+		// Re-arm unconditionally, then only inspect when a check can be used:
+		// an idle, unlocked landing screen. Refreshing mid-form or mid-operation
+		// would move the panel under the user or fight a running git command.
+		next := syncRefreshTick()
+		if m.busy || m.updating || m.accessRequired || m.cfg.VaultPath == "" {
+			return m, next
+		}
+		switch m.screen {
+		case screenProjects, screenProfiles:
+			return m, tea.Batch(next, inspectSyncCmd(m.cfg))
+		default:
+			return m, next
+		}
+
+	case divergenceReportMsg:
+		m.busy = false
+		if msg.err != nil {
+			m.errText = safeError(msg.err)
+			return m, nil
+		}
+		m.diverged = msg.report
+		m.divergedChoices = map[string]app.DivergenceChoice{}
+		m.divergedCursor = 0
+		m.menuCursor = 0
+		m.screen = screenDiverged
+		return m, nil
+
 	case updateCheckMsg:
 		if msg.available {
 			m.updateLatest = msg.latest
@@ -476,6 +547,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.accessRequired = false
 		m.migrationRecoveryRequired = false
+		m.pendingApprovals = app.PendingApprovals(*m.cfg, m.manifest)
+		if m.approvalCursor >= len(m.pendingApprovals) {
+			m.approvalCursor = max(0, len(m.pendingApprovals)-1)
+		}
+		m.recoveryExported = app.HasRecoveryBackup(*m.cfg)
 		if !m.landed {
 			m.landed = true
 			if !m.browseProjects && m.current.LinkedName != "" {
@@ -496,13 +572,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.info = msg.info
 		if m.cfg.VaultPath != "" {
 			switch m.screen {
-			case screenCreate, screenClone,
+			case screenCreate:
+				// A brand-new vault has exactly one copy of its key, on this
+				// computer. Ask for the backup now, while it matters, instead of
+				// hiding it behind an undocumented key the user never finds.
+				home, _ := os.UserHomeDir()
+				m.screen = screenRecoveryPrompt
+				m.fields = []field{{"Recovery key file", filepath.Join(home, "gitenv-recovery.txt"), false}}
+				m.fieldCursor = 0
+				return m, tea.Batch(loadCmd(m.cfg, m.cwd), inspectSyncCmd(m.cfg))
+			case screenClone,
 				screenAddProject, screenNewProfile,
 				screenRemoteChange, screenConfirmRemoveRemote,
 				screenMigrate, screenUnlock, screenUnlockPassword,
-				screenImportRecovery, screenRecovery,
-				screenProjectOptions:
+				screenImportRecovery, screenRecovery, screenRecoveryPrompt,
+				screenDevices, screenConfirmApprove:
 				m.screen = screenProjects
+			case screenProjectOptions:
+				m.screen = m.optionsReturnScreen()
 			case screenEnrollRequest:
 				m.screen = screenUnlock
 			}

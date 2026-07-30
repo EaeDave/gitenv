@@ -81,6 +81,11 @@ type LocalConfig struct {
 	// WorkspaceRoot is where clones of missing projects are created. Empty
 	// means "infer from the projects already linked on this computer".
 	WorkspaceRoot string `json:"workspace_root,omitempty"`
+	// RecoveryExportedAt records when this computer last wrote a recovery key
+	// to a file. It exists so the interface can keep warning until a backup has
+	// actually been made: losing the master password with no recovery key is
+	// unrecoverable by design, and the old UI never mentioned it.
+	RecoveryExportedAt *time.Time `json:"recovery_exported_at,omitempty"`
 	// Discovery caches the last repository scan so launching the TUI never
 	// walks the filesystem again unprompted.
 	Discovery *DiscoveryCache `json:"discovery,omitempty"`
