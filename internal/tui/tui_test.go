@@ -1169,7 +1169,7 @@ func TestPendingApprovalBannerPointsAtTheDevicesScreen(t *testing.T) {
 		{ID: "req-1", Name: "laptop"},
 	}}
 	joined := strings.Join(m.renderBanners(), "\n")
-	if !strings.Contains(joined, "waiting for approval") || !strings.Contains(joined, "D") {
+	if !strings.Contains(joined, "waiting for approval") || !strings.Contains(joined, "press d") {
 		t.Fatalf("pending approval is not surfaced: %q", joined)
 	}
 	if strings.Contains(joined, "req-1") {

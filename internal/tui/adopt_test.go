@@ -162,12 +162,16 @@ func TestProjectListDistinguishesEmptyFromUnlinked(t *testing.T) {
 	}
 }
 
-// TestAdoptCandidatesPickerLinksSelection verifies the picker links the chosen
-// clone via a command without blocking.
-func TestAdoptCandidatesPickerLinksSelection(t *testing.T) {
+// TestAdoptCandidatesPickerOpensLinkForm verifies a discovered clone still asks
+// for a profile when needed instead of adopting immediately with no choice.
+func TestAdoptCandidatesPickerOpensLinkForm(t *testing.T) {
 	cfg := vault.LocalConfig{VaultPath: "/vault", Projects: map[string]vault.LocalProject{}}
+	manifest := missingProjectManifest()
+	manifest.Projects["api"] = vault.Project{Name: "api", Profiles: map[string]vault.Profile{"dev": {}, "prod": {}}}
 	m := model{
 		cfg:             &cfg,
+		manifest:        manifest,
+		projectStates:   app.ProjectStates(cfg, manifest, nil),
 		screen:          screenAdoptCandidates,
 		adoptName:       "api",
 		adoptCandidates: []string{"/a/api", "/b/api"},
@@ -175,11 +179,39 @@ func TestAdoptCandidatesPickerLinksSelection(t *testing.T) {
 	}
 	next, cmd := m.adoptCandidatesKey(tea.KeyMsg{Type: tea.KeyEnter})
 	got := next.(model)
-	if cmd == nil || !got.busy {
-		t.Fatalf("selecting a candidate did not start the link command: cmd=%v busy=%v", cmd, got.busy)
+	if cmd != nil || got.busy {
+		t.Fatalf("candidate selection skipped the profile form: cmd=%v busy=%v", cmd, got.busy)
 	}
-	if got.adoptPath != "/b/api" {
-		t.Fatalf("selected candidate path not recorded: %q", got.adoptPath)
+	if got.screen != screenAdoptLink || len(got.fields) != 2 {
+		t.Fatalf("candidate did not open multi-profile link form: screen=%v fields=%#v", got.screen, got.fields)
+	}
+	if got.fields[0].value != "/b/api" || got.fields[1].value != "dev" {
+		t.Fatalf("link form defaults are wrong: %#v", got.fields)
+	}
+}
+
+// TestCloneFormChoosesProfileBeforeStarting verifies the Windows failure path:
+// projects with several profiles must ask which one to apply before cloning.
+func TestCloneFormChoosesProfileBeforeStarting(t *testing.T) {
+	cfg := vault.LocalConfig{VaultPath: `C:\Users\windows\AppData\Roaming\gitenv\vault`, WorkspaceRoot: `C:\Users\windows\Desktop`, Projects: map[string]vault.LocalProject{}}
+	manifest := missingProjectManifest()
+	entry := manifest.Projects["api"]
+	entry.Profiles = map[string]vault.Profile{"prod": {}, "dev-dry-run": {}, "dev": {}}
+	manifest.Projects["api"] = entry
+	m := model{cfg: &cfg, manifest: manifest}
+
+	m.openAdoptClone(app.ProjectState{Name: "api", Kind: app.ProjectMissing})
+	if m.screen != screenAdoptClone || len(m.fields) != 2 {
+		t.Fatalf("multi-profile clone form missing profile choice: screen=%v fields=%#v", m.screen, m.fields)
+	}
+	if m.fields[1].value != "dev" {
+		t.Fatalf("profile default is not stable/sorted: %#v", m.fields)
+	}
+	view := m.renderAdoptClone(120)
+	for _, profile := range []string{"dev", "dev-dry-run", "prod"} {
+		if !strings.Contains(view, profile) {
+			t.Fatalf("clone form does not show profile %q:\n%s", profile, view)
+		}
 	}
 }
 

@@ -47,20 +47,21 @@ func discoverCmd(cfg *vault.LocalConfig) tea.Cmd {
 }
 
 // cloneAdoptCmd clones the recorded repository into dest, then links and applies
-// the env file. The redacted outcome names the method that actually succeeded.
-func cloneAdoptCmd(cfg *vault.LocalConfig, name, dest string) tea.Cmd {
+// the explicitly selected profile. The redacted outcome names the method that
+// actually succeeded.
+func cloneAdoptCmd(cfg *vault.LocalConfig, name, dest, profile string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), cloneTimeout)
 		defer cancel()
-		outcome, err := app.CloneAndAdopt(ctx, cfg, name, dest, "")
+		outcome, err := app.CloneAndAdopt(ctx, cfg, name, dest, profile)
 		return adoptMsg{project: name, outcome: outcome, err: err}
 	}
 }
 
-// linkAdoptCmd links an already-present clone at path and applies the env file.
-func linkAdoptCmd(cfg *vault.LocalConfig, name, path string) tea.Cmd {
+// linkAdoptCmd links an already-present clone and applies the selected profile.
+func linkAdoptCmd(cfg *vault.LocalConfig, name, path, profile string) tea.Cmd {
 	return func() tea.Msg {
-		if err := app.AdoptProject(cfg, name, path, ""); err != nil {
+		if err := app.AdoptProject(cfg, name, path, profile); err != nil {
 			return adoptMsg{project: name, err: err}
 		}
 		return adoptMsg{project: name}

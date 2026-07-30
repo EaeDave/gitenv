@@ -320,14 +320,31 @@ func CloneAndAdopt(ctx context.Context, cfg *vault.LocalConfig, name, dest, prof
 	if identity == "" && cloneURL == "" {
 		return gitops.CloneOutcome{}, fmt.Errorf("project %q has no recorded repository to clone", name)
 	}
-	if err := ensureEmptyDest(dest); err != nil {
+	expectedIdentity := identity
+	if expectedIdentity == "" {
+		expectedIdentity = gitops.NormalizeRemoteURL(cloneURL)
+	}
+	reuse, err := reusableClone(dest, expectedIdentity)
+	if err != nil {
 		return gitops.CloneOutcome{}, err
+	}
+	if !reuse {
+		if err := ensureEmptyDest(dest); err != nil {
+			return gitops.CloneOutcome{}, err
+		}
+	}
+	resolvedProfile, err := resolveAdoptProfile(*cfg, entry, name, profile)
+	if err != nil {
+		return gitops.CloneOutcome{}, err
+	}
+	if reuse {
+		return gitops.CloneOutcome{}, AdoptProject(cfg, name, dest, resolvedProfile)
 	}
 	outcome, err := gitops.CloneRepository(ctx, identity, cloneURL, dest)
 	if err != nil {
 		return outcome, err
 	}
-	if err := AdoptProject(cfg, name, dest, profile); err != nil {
+	if err := AdoptProject(cfg, name, dest, resolvedProfile); err != nil {
 		return outcome, err
 	}
 	return outcome, nil
@@ -349,6 +366,35 @@ func ensureEmptyDest(dest string) error {
 		return fmt.Errorf("clone destination %s already exists and is not empty", dest)
 	}
 	return nil
+}
+
+// reusableClone recognizes a checkout left by a previous clone-and-adopt attempt.
+// Reuse is deliberately strict: only a non-empty Git repository whose origin
+// normalizes to the vault's recorded identity is accepted. This lets a user
+// recover from a later adoption failure without ever adopting an unrelated
+// directory that happens to have the suggested name.
+func reusableClone(dest, expectedIdentity string) (bool, error) {
+	entries, err := os.ReadDir(dest)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect clone destination %s: %w", dest, err)
+	}
+	if len(entries) == 0 {
+		return false, nil
+	}
+	rawURL, err := gitops.RemoteURL(dest, "origin")
+	if err != nil {
+		// Not a reusable checkout. Let ensureEmptyDest produce the established,
+		// clearer non-empty-directory error.
+		return false, nil
+	}
+	actualIdentity := gitops.NormalizeRemoteURL(rawURL)
+	if expectedIdentity == "" || actualIdentity != expectedIdentity {
+		return false, fmt.Errorf("clone destination %s belongs to %q, expected %q", dest, actualIdentity, expectedIdentity)
+	}
+	return true, nil
 }
 
 // RunDiscovery scans the default roots for clones, folds them into an

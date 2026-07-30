@@ -100,7 +100,7 @@ v       open the change viewer
 f       find local clones of vault projects
 o       project options (env file, line endings)
 b       save your recovery key
-D       devices and pending approvals
+d       devices and pending approvals
 a       add the current directory as a project
 g       sync repository settings
 ?       full keymap and glossary

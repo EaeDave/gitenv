@@ -25,6 +25,19 @@ func twoPendingModel() model {
 	}
 }
 
+// TestLowercaseDOpensDevices pins the user-facing shortcut: routine navigation
+// must not require Shift. Uppercase D was the original regression.
+func TestLowercaseDOpensDevices(t *testing.T) {
+	cfg := vault.LocalConfig{VaultPath: "/vault", Projects: map[string]vault.LocalProject{}}
+	m := model{cfg: &cfg, screen: screenProjects}
+
+	next, cmd := m.projectsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	got := next.(model)
+	if cmd != nil || got.screen != screenDevices {
+		t.Fatalf("lowercase d did not open devices: screen=%v cmd=%v", got.screen, cmd)
+	}
+}
+
 // TestDevicesRendersNamesNeverIDs is the regression guard for the whole design:
 // device names appear, request ids never do.
 func TestDevicesRendersNamesNeverIDs(t *testing.T) {

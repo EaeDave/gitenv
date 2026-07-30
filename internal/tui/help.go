@@ -34,7 +34,7 @@ func keymapFor(s screen) []keyBinding {
 			{"s", "sync (publish or pull)"},
 			{"g", "sync repository settings"},
 			{"b", "save recovery key"},
-			{"D", "devices & approvals"},
+			{"d", "devices & approvals"},
 			{"r", "refresh"},
 			{"?", "this help"},
 			{"q", "quit"},

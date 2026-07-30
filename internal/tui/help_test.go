@@ -38,12 +38,13 @@ func TestHelpReturnsToOriginatingScreen(t *testing.T) {
 	}
 }
 
-// TestHelpScreenDocumentsUndocumentedProjectKeys is the regression guard for the
-// two keys the audit found working but shown in no help line: `b` and `D`.
-func TestHelpScreenDocumentsUndocumentedProjectKeys(t *testing.T) {
+// TestHelpScreenDocumentsProjectUtilityKeys guards the two less-frequent
+// project actions: recovery backup and device approval. Both use lowercase
+// letters because routine navigation must not require Shift.
+func TestHelpScreenDocumentsProjectUtilityKeys(t *testing.T) {
 	km := keymapFor(screenProjects)
-	if !keymapHasKey(km, "b") || !keymapHasKey(km, "D") {
-		t.Fatalf("projects keymap is missing b or D: %#v", km)
+	if !keymapHasKey(km, "b") || !keymapHasKey(km, "d") {
+		t.Fatalf("projects keymap is missing b or d: %#v", km)
 	}
 
 	m := model{screen: screenHelp, helpReturn: screenProjects}
@@ -52,7 +53,7 @@ func TestHelpScreenDocumentsUndocumentedProjectKeys(t *testing.T) {
 		t.Fatalf("help screen does not document the b/save-recovery binding:\n%s", out)
 	}
 	if !strings.Contains(out, "devices") {
-		t.Fatalf("help screen does not document the D/devices binding:\n%s", out)
+		t.Fatalf("help screen does not document the d/devices binding:\n%s", out)
 	}
 }
 

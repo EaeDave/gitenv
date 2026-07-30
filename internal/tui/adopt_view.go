@@ -111,6 +111,7 @@ func (m model) renderAdoptClone(width int) string {
 	state, _ := m.projectStateByName(m.adoptName)
 	context := labelValue("Project", m.adoptName) + "\n" +
 		labelValue("Repository", repositoryLabel(state)) + "\n" +
+		m.adoptProfileOptions() +
 		styles.muted.Render("No local clone found. Clone the repository, then link and apply its env file.")
 	return m.renderAdoptForm("Clone and adopt "+m.adoptName, context, width)
 }
@@ -120,8 +121,18 @@ func (m model) renderAdoptLink(width int) string {
 	state, _ := m.projectStateByName(m.adoptName)
 	context := labelValue("Project", m.adoptName) + "\n" +
 		labelValue("Repository", repositoryLabel(state)) + "\n" +
+		m.adoptProfileOptions() +
 		styles.muted.Render("Point gitenv at the local clone to link and apply its env file.")
 	return m.renderAdoptForm("Link "+m.adoptName, context, width)
+}
+
+// adoptProfileOptions makes valid input discoverable beside the profile field.
+func (m model) adoptProfileOptions() string {
+	profiles := sortedKeys(m.manifest.Projects[m.adoptName].Profiles)
+	if len(profiles) <= 1 {
+		return ""
+	}
+	return labelValue("Profiles", strings.Join(profiles, ", ")) + "\n"
 }
 
 // renderAdoptCandidates is the picker shown when several clones match.

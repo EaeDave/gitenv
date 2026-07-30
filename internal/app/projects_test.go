@@ -385,6 +385,43 @@ func TestCloneAndAdoptGuards(t *testing.T) {
 	}
 }
 
+// TestCloneAndAdoptReusesCheckoutAfterProfileChoiceFailure covers the exact
+// recovery needed when cloning succeeded but adoption stopped for an ambiguous
+// profile. A second attempt must reuse the matching checkout, never clone over
+// it, and apply the newly selected profile.
+func TestCloneAndAdoptReusesCheckoutAfterProfileChoiceFailure(t *testing.T) {
+	cfg, root := newVaultWithCapturedProject(t, "api", "dev", []byte("MODE=dev\n"))
+	manifest, err := vault.LoadManifest(cfg.VaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := manifest.Projects["api"]
+	entry.Repositories = []vault.Repository{{Identity: "github.com/acme/api", CloneURL: "https://github.com/acme/api.git"}}
+	manifest.Projects["api"] = entry
+	if err := vault.SaveManifest(cfg.VaultPath, manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := filepath.Join(root, "Windows Desktop", "api")
+	gitInit(t, dest)
+	runGitIn(t, dest, "remote", "add", "origin", "https://github.com/acme/api.git")
+
+	outcome, err := CloneAndAdopt(context.Background(), &cfg, "api", dest, "dev")
+	if err != nil {
+		t.Fatalf("reuse matching checkout: %v", err)
+	}
+	if outcome.Method != "" {
+		t.Fatalf("matching existing checkout was cloned again: %+v", outcome)
+	}
+	if got := cfg.Projects["api"]; got.Path != dest || got.ActiveProfile != "dev" {
+		t.Fatalf("checkout not fully adopted: %+v", got)
+	}
+	content, err := os.ReadFile(filepath.Join(dest, ".env"))
+	if err != nil || string(content) != "MODE=dev\n" {
+		t.Fatalf("selected profile not applied: content=%q err=%v", content, err)
+	}
+}
+
 // TestEnsureVaultUpgradedRefusesWhenRemoteIsAhead pins the guard that keeps two
 // computers from upgrading the same vault independently. The upgrade assigns
 // fresh random ids, so a second, separate upgrade produces a different layout of

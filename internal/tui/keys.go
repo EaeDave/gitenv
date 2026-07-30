@@ -275,7 +275,7 @@ func (m model) submitFormValues(values []string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.adoptPath = values[0]
-		return m, cloneAdoptCmd(m.cfg, m.adoptName, values[0])
+		return m, cloneAdoptCmd(m.cfg, m.adoptName, values[0], adoptProfileValue(values))
 	case screenAdoptLink:
 		if values[0] == "" {
 			m.busy = false
@@ -283,7 +283,7 @@ func (m model) submitFormValues(values []string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.adoptPath = values[0]
-		return m, linkAdoptCmd(m.cfg, m.adoptName, values[0])
+		return m, linkAdoptCmd(m.cfg, m.adoptName, values[0], adoptProfileValue(values))
 	case screenProjectOptions:
 		name, envFile, endings := m.adoptName, values[0], values[1]
 		cfg := *m.cfg
@@ -358,7 +358,7 @@ func (m model) projectsKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.screen = screenRecovery
 		m.fields = []field{{"Recovery key file", filepath.Join(home, "gitenv-recovery.txt"), false}}
 		m.fieldCursor = 0
-	case "D":
+	case "d":
 		m.screen, m.menuCursor, m.approvalCursor = screenDevices, 0, 0
 	case "o":
 		m.openProjectOptions()
@@ -500,6 +500,16 @@ func (m *model) openProjectOptions() {
 
 // openProjectOptionsFor opens the options form for a project addressed by name,
 // so the profiles screen can reach it without the project list being visible.
+// adoptProfileValue returns the optional profile field added to adoption forms.
+// Single-profile projects omit it because app.AdoptProject can resolve them
+// unambiguously.
+func adoptProfileValue(values []string) string {
+	if len(values) < 2 {
+		return ""
+	}
+	return values[1]
+}
+
 func (m *model) openProjectOptionsFor(name string) {
 	state, ok := m.projectStateByName(name)
 	if !ok {
@@ -535,11 +545,12 @@ func (m model) optionsReturnScreen() screen {
 }
 
 // openAdoptClone opens the clone-and-adopt form for a project with a recorded
-// repository but no local clone, prefilling the workspace destination.
+// repository but no local clone, prefilling the workspace destination. A
+// multi-profile project gets an explicit profile field before any clone starts.
 func (m *model) openAdoptClone(state app.ProjectState) {
 	m.adoptName = state.Name
 	m.screen = screenAdoptClone
-	m.fields = []field{{"Destination directory", app.SuggestCloneDest(*m.cfg, state.Name), false}}
+	m.fields = m.adoptFields("Destination directory", app.SuggestCloneDest(*m.cfg, state.Name), state.Name)
 	m.fieldCursor = 0
 }
 
@@ -548,8 +559,20 @@ func (m *model) openAdoptClone(state app.ProjectState) {
 func (m *model) openAdoptLink(state app.ProjectState, path string) {
 	m.adoptName = state.Name
 	m.screen = screenAdoptLink
-	m.fields = []field{{"Project directory", path, false}}
+	m.fields = m.adoptFields("Project directory", path, state.Name)
 	m.fieldCursor = 0
+}
+
+// adoptFields adds a profile choice only when the vault cannot choose safely.
+// The sorted first profile is a deterministic default, while the surrounding
+// form lists every valid option so the user can change it before confirming.
+func (m model) adoptFields(pathLabel, path, project string) []field {
+	fields := []field{{pathLabel, path, false}}
+	profiles := sortedKeys(m.manifest.Projects[project].Profiles)
+	if len(profiles) > 1 {
+		fields = append(fields, field{"Profile to apply", profiles[0], false})
+	}
+	return fields
 }
 
 // openAdoptCandidates opens the picker for a project with several local clones.
@@ -574,10 +597,13 @@ func (m model) adoptCandidatesKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		path := m.adoptCandidates[m.menuCursor]
-		m.adoptPath = path
-		m.busy = true
-		m.screen = screenProjects
-		return m, linkAdoptCmd(m.cfg, m.adoptName, path)
+		state, ok := m.projectStateByName(m.adoptName)
+		if !ok {
+			m.errText = "project is unavailable until the vault finishes loading"
+			return m, nil
+		}
+		m.openAdoptLink(state, path)
+		return m, nil
 	}
 	return m, nil
 }

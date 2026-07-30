@@ -41,7 +41,7 @@ func (m model) renderBanners() []string {
 		if count > 1 {
 			label = fmt.Sprintf("%d computers are waiting for approval", count)
 		}
-		banners = append(banners, styles.warning.Render("● "+label+" — press D to review"))
+		banners = append(banners, styles.warning.Render("● "+label+" — press d to review"))
 	}
 	if !m.recoveryExported {
 		// Worded as "not confirmed" rather than "none saved": a vault created
