@@ -323,3 +323,22 @@ func AddEnrollmentRequest(root string, req EnrollmentRequest) error {
 	m.EnrollmentRequests = append(m.EnrollmentRequests, req)
 	return saveEnrollmentManifest(root, m)
 }
+
+// RejectEnrollmentRequest removes a pending request without changing recipients,
+// devices, or encrypted files. The request ID must exist: silently succeeding
+// would let a stale UI claim it rejected a request another computer already
+// approved or removed.
+func RejectEnrollmentRequest(root, requestID string) error {
+	m, err := loadEnrollmentManifest(root)
+	if err != nil {
+		return err
+	}
+	for index, request := range m.EnrollmentRequests {
+		if request.ID != requestID {
+			continue
+		}
+		m.EnrollmentRequests = append(m.EnrollmentRequests[:index], m.EnrollmentRequests[index+1:]...)
+		return saveEnrollmentManifest(root, m)
+	}
+	return fmt.Errorf("enrollment request %q not found", requestID)
+}

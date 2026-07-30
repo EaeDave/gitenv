@@ -118,6 +118,54 @@ func TestCreateEnrollmentRequestNoPrivateKey(t *testing.T) {
 	}
 }
 
+// TestRejectEnrollmentRequestRemovesOnlyPendingRequest proves rejection grants
+// nothing and leaves trusted devices/recipients untouched.
+func TestRejectEnrollmentRequestRemovesOnlyPendingRequest(t *testing.T) {
+	vaultDir := setupEnrollmentVault(t)
+	_, rejected, err := CreateEnrollmentRequest("unknown-laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, kept, err := CreateEnrollmentRequest("known-laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := AddEnrollmentRequest(vaultDir, rejected); err != nil {
+		t.Fatal(err)
+	}
+	if err := AddEnrollmentRequest(vaultDir, kept); err != nil {
+		t.Fatal(err)
+	}
+	before, err := LoadManifest(vaultDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RejectEnrollmentRequest(vaultDir, rejected.ID); err != nil {
+		t.Fatal(err)
+	}
+	after, err := LoadManifest(vaultDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.EnrollmentRequests) != 1 || after.EnrollmentRequests[0].ID != kept.ID {
+		t.Fatalf("wrong pending queue after rejection: %#v", after.EnrollmentRequests)
+	}
+	if strings.Join(after.Recipients, ",") != strings.Join(before.Recipients, ",") {
+		t.Fatalf("rejection changed recipients: before=%v after=%v", before.Recipients, after.Recipients)
+	}
+	if len(after.Devices) != len(before.Devices) {
+		t.Fatalf("rejection changed enrolled devices: before=%v after=%v", before.Devices, after.Devices)
+	}
+}
+
+func TestRejectEnrollmentRequestRefusesUnknownID(t *testing.T) {
+	vaultDir := setupEnrollmentVault(t)
+	if err := RejectEnrollmentRequest(vaultDir, "missing"); err == nil {
+		t.Fatal("expected unknown request rejection to fail")
+	}
+}
+
 // TestApproveEnrollmentRequestNewIdentityDecryptsAll verifies that after approval
 // the new device's identity can decrypt every profile AND the project metadata.
 func TestApproveEnrollmentRequestNewIdentityDecryptsAll(t *testing.T) {

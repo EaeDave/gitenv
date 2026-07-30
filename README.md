@@ -107,6 +107,10 @@ g       sync repository settings
 r       reload        q  quit
 ```
 
+Devices screen: `enter` approves the selected request; `x` rejects and removes
+it after confirmation. Rejection grants no access, and that computer may request
+approval again later.
+
 Profiles screen:
 
 ```text

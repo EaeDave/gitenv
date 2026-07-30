@@ -105,6 +105,8 @@ func (m model) renderScreen(width int) string {
 		return m.renderDevices(width)
 	case screenConfirmApprove:
 		return m.renderConfirmApprove(width)
+	case screenConfirmReject:
+		return m.renderConfirmReject(width)
 	case screenDiverged:
 		return m.renderDiverged(width)
 	case screenDivergedProfiles:

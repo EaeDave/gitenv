@@ -49,6 +49,7 @@ const (
 	screenRecoveryPrompt      // form: export recovery identity, right after vault creation
 	screenDevices             // cursor menu: enrolled devices + pending approvals
 	screenConfirmApprove      // y/N: approve a pending device enrollment
+	screenConfirmReject       // y/N: reject and remove a pending enrollment
 	screenDiverged            // cursor menu: how to resolve a diverged vault
 	screenDivergedProfiles    // cursor menu: per-profile choice for both-changed profiles
 	screenConfirmDiverged     // y/N: apply the chosen divergence resolution

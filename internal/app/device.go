@@ -59,6 +59,25 @@ func ApproveDeviceEnrollment(cfg vault.LocalConfig, requestID string) error {
 	return gitops.CommitAndPush(cfg.VaultPath, "gitenv: approve device enrollment")
 }
 
+// RejectDeviceEnrollment pulls the current queue, removes one pending request,
+// then publishes that decision. Unlike approval, rejection never loads an
+// identity or re-encrypts vault content because it grants no access.
+func RejectDeviceEnrollment(cfg vault.LocalConfig, requestID string) error {
+	if cfg.VaultPath == "" {
+		return errors.New("no vault configured")
+	}
+	if !HasRemote(cfg) {
+		return errors.New("device enrollment requires a configured vault sync repository")
+	}
+	if err := gitops.Pull(cfg.VaultPath); err != nil {
+		return err
+	}
+	if err := vault.RejectEnrollmentRequest(cfg.VaultPath, requestID); err != nil {
+		return err
+	}
+	return gitops.CommitAndPush(cfg.VaultPath, "gitenv: reject device enrollment")
+}
+
 func ActivateDeviceEnrollment(cfg *vault.LocalConfig, requestID string, mode vault.IdentityStoreMode) error {
 	if cfg.VaultPath == "" {
 		return errors.New("no vault configured")
@@ -78,7 +97,17 @@ func ActivateDeviceEnrollment(cfg *vault.LocalConfig, requestID string, mode vau
 		return err
 	}
 	if !manifestHasRecipient(manifest, identity.Recipient().String()) {
-		return fmt.Errorf("device enrollment %q is not approved yet", requestID)
+		if manifestHasEnrollmentRequest(manifest, requestID) {
+			return fmt.Errorf("device enrollment %q is not approved yet", requestID)
+		}
+		// The shared request disappeared without this recipient being added, so a
+		// trusted device rejected it. Clear local pending state to allow retry.
+		_ = vault.DeletePendingIdentity(requestID)
+		cfg.PendingEnrollmentID = ""
+		if err := vault.SaveLocal(*cfg); err != nil {
+			return err
+		}
+		return fmt.Errorf("device enrollment %q was rejected; request approval again if needed", requestID)
 	}
 	if err := vault.StoreUnlockedIdentity(identity, mode); err != nil {
 		return err
@@ -91,6 +120,15 @@ func ActivateDeviceEnrollment(cfg *vault.LocalConfig, requestID string, mode vau
 func manifestHasRecipient(manifest vault.Manifest, recipient string) bool {
 	for _, candidate := range manifest.Recipients {
 		if candidate == recipient {
+			return true
+		}
+	}
+	return false
+}
+
+func manifestHasEnrollmentRequest(manifest vault.Manifest, requestID string) bool {
+	for _, request := range manifest.EnrollmentRequests {
+		if request.ID == requestID {
 			return true
 		}
 	}

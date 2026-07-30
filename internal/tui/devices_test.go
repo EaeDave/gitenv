@@ -75,6 +75,43 @@ func TestEnterOnPendingRequestConfirms(t *testing.T) {
 	}
 }
 
+// TestXOnPendingRequestConfirmsRejection ensures rejection is discoverable but
+// never executes from a single accidental keypress.
+func TestXOnPendingRequestConfirmsRejection(t *testing.T) {
+	m := twoPendingModel()
+	m.approvalCursor = 1
+
+	next, cmd := m.devicesKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	got := next.(model)
+	if cmd != nil || got.screen != screenConfirmReject {
+		t.Fatalf("x did not open rejection confirmation: screen=%v cmd=%v", got.screen, cmd)
+	}
+	prompt := got.renderConfirmReject(80)
+	if !strings.Contains(prompt, "home-desktop") || !strings.Contains(prompt, "No vault access") {
+		t.Fatalf("rejection prompt is not explicit:\n%s", prompt)
+	}
+}
+
+// TestConfirmRejectStartsOnlyOnYes mirrors approval's safety contract: yes
+// starts the operation; any other input returns without mutating the vault.
+func TestConfirmRejectStartsOnlyOnYes(t *testing.T) {
+	m := twoPendingModel()
+	m.screen = screenConfirmReject
+	m.approvalCursor = 0
+
+	next, cmd := m.confirmRejectKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	got := next.(model)
+	if cmd == nil || !got.busy || got.screen != screenDevices {
+		t.Fatalf("y did not start rejection: screen=%v busy=%v cmd=%v", got.screen, got.busy, cmd)
+	}
+
+	next, cmd = m.confirmRejectKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	got = next.(model)
+	if cmd != nil || got.busy || got.screen != screenDevices || got.info != "cancelled" {
+		t.Fatalf("cancel started or lost rejection state: screen=%v busy=%v info=%q cmd=%v", got.screen, got.busy, got.info, cmd)
+	}
+}
+
 // TestConfirmApproveStartsOperationOnlyOnYes verifies y starts the (slow)
 // re-encrypt-and-push through opCmd with the spinner on, while any other key
 // cancels back to the roster without touching the vault.
@@ -102,10 +139,9 @@ func TestConfirmApproveStartsOperationOnlyOnYes(t *testing.T) {
 	}
 }
 
-// TestDevicesEmptyStateRendersAndEnterIsNoop verifies that with no pending
-// requests the screen still renders (and explains where requests come from),
-// and enter does nothing rather than opening a dead confirmation.
-func TestDevicesEmptyStateRendersAndEnterIsNoop(t *testing.T) {
+// TestDevicesEmptyStateActionsAreNoops verifies that with no pending requests
+// the screen still renders, and neither approve nor reject opens a dead screen.
+func TestDevicesEmptyStateActionsAreNoops(t *testing.T) {
 	cfg := vault.LocalConfig{VaultPath: "/vault", Projects: map[string]vault.LocalProject{}}
 	m := model{cfg: &cfg, screen: screenDevices}
 
@@ -121,5 +157,10 @@ func TestDevicesEmptyStateRendersAndEnterIsNoop(t *testing.T) {
 	}
 	if got.screen != screenDevices {
 		t.Fatalf("enter with no pending request should stay put: screen=%v", got.screen)
+	}
+	next, cmd = m.devicesKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	got = next.(model)
+	if cmd != nil || got.screen != screenDevices {
+		t.Fatalf("x with no pending request must stay put: screen=%v cmd=%v", got.screen, cmd)
 	}
 }

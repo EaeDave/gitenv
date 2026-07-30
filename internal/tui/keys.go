@@ -85,6 +85,8 @@ func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.devicesKey(key)
 	case screenConfirmApprove:
 		return m.confirmApproveKey(key)
+	case screenConfirmReject:
+		return m.confirmRejectKey(key)
 	case screenDiverged:
 		return m.divergedKey(key)
 	case screenDivergedProfiles:

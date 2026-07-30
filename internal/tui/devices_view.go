@@ -44,7 +44,7 @@ func (m model) renderDevices(width int) string {
 	}
 
 	panel := renderPanel("Devices", strings.Join(rows, "\n"), min(width, 76), true)
-	help := renderHelp("↑↓", "select", "enter", "approve", "r", "reload", "?", "help", "esc", "back")
+	help := renderHelp("↑↓", "select", "enter", "approve", "x", "reject", "r", "reload", "?", "help", "esc", "back")
 	return lipgloss.JoinVertical(lipgloss.Left, panel, "", help)
 }
 
@@ -62,6 +62,20 @@ func (m model) renderConfirmApprove(width int) string {
 		name, name,
 	)
 	return m.renderConfirmation("Approve device?", message, width)
+}
+
+// renderConfirmReject names the device and the exact effect: remove this
+// request, without implying the already-enrolled roster is affected.
+func (m model) renderConfirmReject(width int) string {
+	name := "this device"
+	if request, ok := m.selectedApproval(); ok {
+		name = request.Name
+	}
+	message := fmt.Sprintf(
+		"Reject %q?\nNo vault access will be granted.\nThe request will be removed. It may request again. [y/N]",
+		name,
+	)
+	return m.renderConfirmation("Reject device request?", message, width)
 }
 
 // humanizeSince renders how long ago t was in plain terms, so the roster reads

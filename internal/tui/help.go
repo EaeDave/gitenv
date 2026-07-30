@@ -75,6 +75,7 @@ func keymapFor(s screen) []keyBinding {
 		return []keyBinding{
 			{"↑↓/jk", "select device or request"},
 			{"enter", "approve pending request"},
+			{"x", "reject pending request"},
 			{"r", "reload"},
 			{"?", "this help"},
 			{"esc/q", "back"},
