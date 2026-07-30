@@ -121,6 +121,8 @@ func (m model) renderScreen(width int) string {
 		return m.renderProfiles(width)
 	case screenAdoptClone:
 		return m.renderAdoptClone(width)
+	case screenAdoptProfile:
+		return m.renderAdoptProfile(width)
 	case screenAdoptLink:
 		return m.renderAdoptLink(width)
 	case screenAdoptCandidates:

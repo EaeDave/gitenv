@@ -35,6 +35,7 @@ const (
 	screenAdoptClone          // form: destination directory for clone-and-adopt
 	screenAdoptLink           // form: local project directory to link
 	screenAdoptCandidates     // cursor menu: pick one of several discovered clones
+	screenAdoptProfile        // cursor menu: choose existing profile before clone/link
 	screenProjectOptions      // form: env file + line endings
 	screenRemote              // cursor menu: Change / Test / Remove / Back
 	screenRemoteChange        // form: vault sync repository URL
@@ -134,7 +135,8 @@ type model struct {
 	projects, profiles                                     []string
 	projectStates                                          []app.ProjectState
 	adoptName, adoptPath                                   string
-	adoptCandidates                                        []string
+	adoptCandidates, adoptProfiles                         []string
+	adoptReturn                                            screen
 	projectCursor, profileCursor, menuCursor, fieldCursor  int
 	selectedProject, pendingProfile, pendingProject        string
 	pendingSync                                            gitops.SyncState

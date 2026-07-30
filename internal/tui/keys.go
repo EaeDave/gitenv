@@ -51,6 +51,8 @@ func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.projectsKey(key)
 	case screenAdoptCandidates:
 		return m.adoptCandidatesKey(key)
+	case screenAdoptProfile:
+		return m.adoptProfileKey(key)
 	case screenProfiles:
 		return m.profilesKey(key)
 	case screenRemote:
@@ -268,22 +270,18 @@ func (m model) submitFormValues(values []string) (tea.Model, tea.Cmd) {
 		return m, opCmd(func() error {
 			return app.ExportRecoveryKey(cfg, values[0])
 		}, "recovery key saved — keep it somewhere other than this computer")
-	case screenAdoptClone:
+	case screenAdoptClone, screenAdoptLink:
 		if values[0] == "" {
 			m.busy = false
-			m.errText = "destination directory is required"
+			if m.screen == screenAdoptClone {
+				m.errText = "destination directory is required"
+			} else {
+				m.errText = "project directory is required"
+			}
 			return m, nil
 		}
-		m.adoptPath = values[0]
-		return m, cloneAdoptCmd(m.cfg, m.adoptName, values[0], adoptProfileValue(values))
-	case screenAdoptLink:
-		if values[0] == "" {
-			m.busy = false
-			m.errText = "project directory is required"
-			return m, nil
-		}
-		m.adoptPath = values[0]
-		return m, linkAdoptCmd(m.cfg, m.adoptName, values[0], adoptProfileValue(values))
+		m.busy = false
+		return m.beginAdopt(values[0])
 	case screenProjectOptions:
 		name, envFile, endings := m.adoptName, values[0], values[1]
 		cfg := *m.cfg
@@ -500,15 +498,6 @@ func (m *model) openProjectOptions() {
 
 // openProjectOptionsFor opens the options form for a project addressed by name,
 // so the profiles screen can reach it without the project list being visible.
-// adoptProfileValue returns the optional profile field added to adoption forms.
-// Single-profile projects omit it because app.AdoptProject can resolve them
-// unambiguously.
-func adoptProfileValue(values []string) string {
-	if len(values) < 2 {
-		return ""
-	}
-	return values[1]
-}
 
 func (m *model) openProjectOptionsFor(name string) {
 	state, ok := m.projectStateByName(name)
@@ -545,12 +534,11 @@ func (m model) optionsReturnScreen() screen {
 }
 
 // openAdoptClone opens the clone-and-adopt form for a project with a recorded
-// repository but no local clone, prefilling the workspace destination. A
-// multi-profile project gets an explicit profile field before any clone starts.
+// repository but no local clone, prefilling the workspace destination.
 func (m *model) openAdoptClone(state app.ProjectState) {
 	m.adoptName = state.Name
 	m.screen = screenAdoptClone
-	m.fields = m.adoptFields("Destination directory", app.SuggestCloneDest(*m.cfg, state.Name), state.Name)
+	m.fields = []field{{"Destination directory", app.SuggestCloneDest(*m.cfg, state.Name), false}}
 	m.fieldCursor = 0
 }
 
@@ -559,20 +547,60 @@ func (m *model) openAdoptClone(state app.ProjectState) {
 func (m *model) openAdoptLink(state app.ProjectState, path string) {
 	m.adoptName = state.Name
 	m.screen = screenAdoptLink
-	m.fields = m.adoptFields("Project directory", path, state.Name)
+	m.fields = []field{{"Project directory", path, false}}
 	m.fieldCursor = 0
 }
 
-// adoptFields adds a profile choice only when the vault cannot choose safely.
-// The sorted first profile is a deterministic default, while the surrounding
-// form lists every valid option so the user can change it before confirming.
-func (m model) adoptFields(pathLabel, path, project string) []field {
-	fields := []field{{pathLabel, path, false}}
-	profiles := sortedKeys(m.manifest.Projects[project].Profiles)
-	if len(profiles) > 1 {
-		fields = append(fields, field{"Profile to apply", profiles[0], false})
+// beginAdopt opens a closed-set profile picker when a project has several
+// profiles. A single profile bypasses the extra screen without weakening the
+// invariant: only names loaded from the manifest reach the adoption command.
+func (m model) beginAdopt(path string) (tea.Model, tea.Cmd) {
+	m.adoptPath = path
+	m.adoptProfiles = sortedKeys(m.manifest.Projects[m.adoptName].Profiles)
+	if len(m.adoptProfiles) > 1 {
+		m.adoptReturn = m.screen
+		m.menuCursor = 0
+		m.screen = screenAdoptProfile
+		return m, nil
 	}
-	return fields
+	profile := ""
+	if len(m.adoptProfiles) == 1 {
+		profile = m.adoptProfiles[0]
+	}
+	return m.startAdopt(profile)
+}
+
+// startAdopt dispatches the operation remembered by adoptReturn/current screen.
+func (m model) startAdopt(profile string) (tea.Model, tea.Cmd) {
+	origin := m.screen
+	if origin == screenAdoptProfile {
+		origin = m.adoptReturn
+	}
+	m.busy = true
+	m.screen = screenProjects
+	if origin == screenAdoptClone {
+		return m, cloneAdoptCmd(m.cfg, m.adoptName, m.adoptPath, profile)
+	}
+	return m, linkAdoptCmd(m.cfg, m.adoptName, m.adoptPath, profile)
+}
+
+// adoptProfileKey selects from manifest-backed profile names; free-form input
+// is intentionally impossible because a typo would only fail after clone work.
+func (m model) adoptProfileKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "esc", "q":
+		m.screen = m.adoptReturn
+	case "up", "k":
+		m.menuCursor = max(0, m.menuCursor-1)
+	case "down", "j":
+		m.menuCursor = min(max(0, len(m.adoptProfiles)-1), m.menuCursor+1)
+	case "enter":
+		if len(m.adoptProfiles) == 0 {
+			return m, nil
+		}
+		return m.startAdopt(m.adoptProfiles[m.menuCursor])
+	}
+	return m, nil
 }
 
 // openAdoptCandidates opens the picker for a project with several local clones.

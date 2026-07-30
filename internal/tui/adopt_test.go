@@ -162,9 +162,9 @@ func TestProjectListDistinguishesEmptyFromUnlinked(t *testing.T) {
 	}
 }
 
-// TestAdoptCandidatesPickerOpensLinkForm verifies a discovered clone still asks
-// for a profile when needed instead of adopting immediately with no choice.
-func TestAdoptCandidatesPickerOpensLinkForm(t *testing.T) {
+// TestAdoptCandidatesPickerOpensProfilePicker verifies a discovered clone flows
+// through the closed-set profile list instead of exposing free-form input.
+func TestAdoptCandidatesPickerOpensProfilePicker(t *testing.T) {
 	cfg := vault.LocalConfig{VaultPath: "/vault", Projects: map[string]vault.LocalProject{}}
 	manifest := missingProjectManifest()
 	manifest.Projects["api"] = vault.Project{Name: "api", Profiles: map[string]vault.Profile{"dev": {}, "prod": {}}}
@@ -179,39 +179,73 @@ func TestAdoptCandidatesPickerOpensLinkForm(t *testing.T) {
 	}
 	next, cmd := m.adoptCandidatesKey(tea.KeyMsg{Type: tea.KeyEnter})
 	got := next.(model)
-	if cmd != nil || got.busy {
-		t.Fatalf("candidate selection skipped the profile form: cmd=%v busy=%v", cmd, got.busy)
+	if cmd != nil || got.screen != screenAdoptLink || len(got.fields) != 1 {
+		t.Fatalf("candidate did not open path-only link form: screen=%v fields=%#v cmd=%v", got.screen, got.fields, cmd)
 	}
-	if got.screen != screenAdoptLink || len(got.fields) != 2 {
-		t.Fatalf("candidate did not open multi-profile link form: screen=%v fields=%#v", got.screen, got.fields)
+	if got.fields[0].value != "/b/api" {
+		t.Fatalf("link path default is wrong: %#v", got.fields)
 	}
-	if got.fields[0].value != "/b/api" || got.fields[1].value != "dev" {
-		t.Fatalf("link form defaults are wrong: %#v", got.fields)
+
+	next, cmd = got.formKey(tea.KeyMsg{Type: tea.KeyEnter})
+	got = next.(model)
+	if cmd != nil || got.screen != screenAdoptProfile {
+		t.Fatalf("link form skipped profile picker: screen=%v cmd=%v", got.screen, cmd)
+	}
+	if strings.Join(got.adoptProfiles, ",") != "dev,prod" {
+		t.Fatalf("profile picker is not manifest-backed and sorted: %#v", got.adoptProfiles)
 	}
 }
 
-// TestCloneFormChoosesProfileBeforeStarting verifies the Windows failure path:
-// projects with several profiles must ask which one to apply before cloning.
-func TestCloneFormChoosesProfileBeforeStarting(t *testing.T) {
+// TestCloneProfilePickerNavigatesAndReturns verifies the Windows flow end to
+// end up to command dispatch: profiles are listed, selection moves, and Esc
+// returns to the destination without losing it.
+func TestCloneProfilePickerNavigatesAndReturns(t *testing.T) {
 	cfg := vault.LocalConfig{VaultPath: `C:\Users\windows\AppData\Roaming\gitenv\vault`, WorkspaceRoot: `C:\Users\windows\Desktop`, Projects: map[string]vault.LocalProject{}}
 	manifest := missingProjectManifest()
 	entry := manifest.Projects["api"]
 	entry.Profiles = map[string]vault.Profile{"prod": {}, "dev-dry-run": {}, "dev": {}}
 	manifest.Projects["api"] = entry
 	m := model{cfg: &cfg, manifest: manifest}
-
 	m.openAdoptClone(app.ProjectState{Name: "api", Kind: app.ProjectMissing})
-	if m.screen != screenAdoptClone || len(m.fields) != 2 {
-		t.Fatalf("multi-profile clone form missing profile choice: screen=%v fields=%#v", m.screen, m.fields)
+	if len(m.fields) != 1 {
+		t.Fatalf("clone form still exposes a profile text field: %#v", m.fields)
 	}
-	if m.fields[1].value != "dev" {
-		t.Fatalf("profile default is not stable/sorted: %#v", m.fields)
+	destination := m.fields[0].value
+
+	next, cmd := m.formKey(tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(model)
+	if cmd != nil || got.screen != screenAdoptProfile {
+		t.Fatalf("clone form did not open profile picker: screen=%v cmd=%v", got.screen, cmd)
 	}
-	view := m.renderAdoptClone(120)
+	view := got.renderAdoptProfile(120)
 	for _, profile := range []string{"dev", "dev-dry-run", "prod"} {
 		if !strings.Contains(view, profile) {
-			t.Fatalf("clone form does not show profile %q:\n%s", profile, view)
+			t.Fatalf("picker does not show profile %q:\n%s", profile, view)
 		}
+	}
+
+	next, _ = got.adoptProfileKey(tea.KeyMsg{Type: tea.KeyDown})
+	got = next.(model)
+	if got.menuCursor != 1 || got.adoptProfiles[got.menuCursor] != "dev-dry-run" {
+		t.Fatalf("picker did not move to second profile: cursor=%d profiles=%#v", got.menuCursor, got.adoptProfiles)
+	}
+	next, cmd = got.adoptProfileKey(tea.KeyMsg{Type: tea.KeyEsc})
+	got = next.(model)
+	if cmd != nil || got.screen != screenAdoptClone || got.fields[0].value != destination {
+		t.Fatalf("escape did not preserve clone form: screen=%v fields=%#v cmd=%v", got.screen, got.fields, cmd)
+	}
+}
+
+// TestProfilePickerEnterStartsRememberedAdoption proves Enter dispatches the
+// remembered clone operation with no extra typing.
+func TestProfilePickerEnterStartsRememberedAdoption(t *testing.T) {
+	cfg := vault.LocalConfig{VaultPath: "/vault", Projects: map[string]vault.LocalProject{}}
+	m := model{cfg: &cfg, screen: screenAdoptProfile, adoptReturn: screenAdoptClone, adoptName: "api", adoptPath: "/work/api", adoptProfiles: []string{"dev", "prod"}, menuCursor: 1}
+
+	next, cmd := m.adoptProfileKey(tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(model)
+	if cmd == nil || !got.busy || got.screen != screenProjects {
+		t.Fatalf("picker Enter did not start clone: screen=%v busy=%v cmd=%v", got.screen, got.busy, cmd)
 	}
 }
 

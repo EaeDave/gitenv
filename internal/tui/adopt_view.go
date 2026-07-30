@@ -102,7 +102,7 @@ func (m model) renderAdoptForm(title, context string, width int) string {
 		rows = append(rows, renderField(f, index == m.fieldCursor, panelWidth))
 	}
 	panel := renderPanel(title, strings.Join(rows, "\n"), panelWidth, true)
-	help := renderHelp("tab", "next field", "enter", "confirm", "ctrl+u", "clear", "esc", "cancel")
+	help := renderHelp("tab", "next field", "enter", "continue", "ctrl+u", "clear", "esc", "cancel")
 	return lipgloss.JoinVertical(lipgloss.Left, panel, "", help)
 }
 
@@ -111,7 +111,6 @@ func (m model) renderAdoptClone(width int) string {
 	state, _ := m.projectStateByName(m.adoptName)
 	context := labelValue("Project", m.adoptName) + "\n" +
 		labelValue("Repository", repositoryLabel(state)) + "\n" +
-		m.adoptProfileOptions() +
 		styles.muted.Render("No local clone found. Clone the repository, then link and apply its env file.")
 	return m.renderAdoptForm("Clone and adopt "+m.adoptName, context, width)
 }
@@ -121,18 +120,18 @@ func (m model) renderAdoptLink(width int) string {
 	state, _ := m.projectStateByName(m.adoptName)
 	context := labelValue("Project", m.adoptName) + "\n" +
 		labelValue("Repository", repositoryLabel(state)) + "\n" +
-		m.adoptProfileOptions() +
 		styles.muted.Render("Point gitenv at the local clone to link and apply its env file.")
 	return m.renderAdoptForm("Link "+m.adoptName, context, width)
 }
 
-// adoptProfileOptions makes valid input discoverable beside the profile field.
-func (m model) adoptProfileOptions() string {
-	profiles := sortedKeys(m.manifest.Projects[m.adoptName].Profiles)
-	if len(profiles) <= 1 {
-		return ""
-	}
-	return labelValue("Profiles", strings.Join(profiles, ", ")) + "\n"
+// renderAdoptProfile lists the only valid choices; users navigate instead of
+// transcribing a profile name into a free-form field.
+func (m model) renderAdoptProfile(width int) string {
+	body := labelValue("Project", m.adoptName) + "\n" +
+		styles.muted.Render("Choose which saved environment to apply after adoption:") + "\n\n" +
+		renderMenu(m.adoptProfiles, m.menuCursor)
+	panel := renderPanel("Choose a profile", body, min(width, 76), true)
+	return lipgloss.JoinVertical(lipgloss.Left, panel, "", renderHelp("↑↓/jk", "select", "enter", "apply", "esc", "back"))
 }
 
 // renderAdoptCandidates is the picker shown when several clones match.
