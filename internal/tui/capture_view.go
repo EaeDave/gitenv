@@ -28,7 +28,12 @@ func (m model) renderCapturePreview(width int) string {
 			rows = append(rows, styles.warning.Render(fmt.Sprintf("! %d unrecognized line change(s)", m.captureDiff.UnknownChanges)))
 		}
 	}
-	rows = append(rows, "", styles.muted.Render("Values are hidden. Capture preserves the file byte for byte."))
+	rows = append(rows,
+		"",
+		styles.muted.Render("Values are hidden. Capture preserves the file byte for byte."),
+		"",
+		m.renderMouseButtons(m.confirmationMouseButtons()),
+	)
 	panel := renderPanel("Capture local .env changes?", strings.Join(rows, "\n"), min(width, 76), true)
 	return lipgloss.JoinVertical(lipgloss.Left, panel, "", renderHelp("enter/y", "capture", "n/esc", "cancel"))
 }

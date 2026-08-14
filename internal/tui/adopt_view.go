@@ -101,6 +101,7 @@ func (m model) renderAdoptForm(title, context string, width int) string {
 	for index, f := range m.fields {
 		rows = append(rows, renderField(f, index == m.fieldCursor, panelWidth))
 	}
+	rows = append(rows, "", m.renderMouseButtons(m.formMouseButtons()))
 	panel := renderPanel(title, strings.Join(rows, "\n"), panelWidth, true)
 	help := renderHelp("tab", "next field", "enter", "continue", "ctrl+u", "clear", "esc", "cancel")
 	return lipgloss.JoinVertical(lipgloss.Left, panel, "", help)

@@ -140,6 +140,12 @@ p / d             publish / discard the selected environment
 esc/q             back
 ```
 
+Mouse: hover rows and buttons for feedback, click to select or activate,
+double-click a project/profile to open/apply it, and use the wheel to navigate
+lists. Mouse support is additive: every action remains available from the
+keyboard. Some terminals require holding `shift` while selecting terminal text
+when mouse tracking is active.
+
 Capture preview: `enter` or `y` confirms; `n` or `esc` cancels.
 Inline editor: `ctrl+s` save, `esc` cancel, `enter` new line.
 Everywhere: `ctrl+c` quits, `U` installs an offered update.

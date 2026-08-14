@@ -11,6 +11,7 @@ type keyBinding struct{ keys, action string }
 // neither goes undocumented the way ctrl+c and U were.
 func globalKeymap() []keyBinding {
 	return []keyBinding{
+		{"mouse", "hover for feedback; click actions; wheel scrolls lists"},
 		{"ctrl+c", "quit immediately, from anywhere"},
 		{"U", "install the available gitenv update (when one is offered)"},
 	}

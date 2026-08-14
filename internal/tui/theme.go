@@ -22,19 +22,22 @@ type palette struct {
 }
 
 type themeStyles struct {
-	brand       lipgloss.Style
-	subtitle    lipgloss.Style
-	title       lipgloss.Style
-	label       lipgloss.Style
-	value       lipgloss.Style
-	muted       lipgloss.Style
-	selected    lipgloss.Style
-	panel       lipgloss.Style
-	activePanel lipgloss.Style
-	key         lipgloss.Style
-	success     lipgloss.Style
-	warning     lipgloss.Style
-	danger      lipgloss.Style
+	brand         lipgloss.Style
+	subtitle      lipgloss.Style
+	title         lipgloss.Style
+	label         lipgloss.Style
+	value         lipgloss.Style
+	muted         lipgloss.Style
+	selected      lipgloss.Style
+	hovered       lipgloss.Style
+	button        lipgloss.Style
+	buttonHovered lipgloss.Style
+	panel         lipgloss.Style
+	activePanel   lipgloss.Style
+	key           lipgloss.Style
+	success       lipgloss.Style
+	warning       lipgloss.Style
+	danger        lipgloss.Style
 }
 
 var (
@@ -67,19 +70,22 @@ func colorsForBackground(isDark bool) palette {
 
 func stylesForPalette(colors palette) themeStyles {
 	return themeStyles{
-		brand:       lipgloss.NewStyle().Bold(true).Foreground(colors.primary),
-		subtitle:    lipgloss.NewStyle().Foreground(colors.muted),
-		title:       lipgloss.NewStyle().Bold(true).Foreground(colors.text),
-		label:       lipgloss.NewStyle().Foreground(colors.muted),
-		value:       lipgloss.NewStyle().Foreground(colors.text),
-		muted:       lipgloss.NewStyle().Foreground(colors.muted),
-		selected:    lipgloss.NewStyle().Bold(true).Foreground(colors.primary),
-		panel:       lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colors.muted).Padding(0, 1),
-		activePanel: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colors.primary).Padding(0, 1),
-		key:         lipgloss.NewStyle().Bold(true).Foreground(colors.accent),
-		success:     lipgloss.NewStyle().Foreground(colors.success),
-		warning:     lipgloss.NewStyle().Foreground(colors.warning),
-		danger:      lipgloss.NewStyle().Foreground(colors.danger),
+		brand:         lipgloss.NewStyle().Bold(true).Foreground(colors.primary),
+		subtitle:      lipgloss.NewStyle().Foreground(colors.muted),
+		title:         lipgloss.NewStyle().Bold(true).Foreground(colors.text),
+		label:         lipgloss.NewStyle().Foreground(colors.muted),
+		value:         lipgloss.NewStyle().Foreground(colors.text),
+		muted:         lipgloss.NewStyle().Foreground(colors.muted),
+		selected:      lipgloss.NewStyle().Bold(true).Foreground(colors.primary),
+		hovered:       lipgloss.NewStyle().Underline(true).Foreground(colors.accent),
+		button:        lipgloss.NewStyle().Foreground(colors.accent),
+		buttonHovered: lipgloss.NewStyle().Bold(true).Underline(true).Foreground(colors.accent),
+		panel:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colors.muted).Padding(0, 1),
+		activePanel:   lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colors.primary).Padding(0, 1),
+		key:           lipgloss.NewStyle().Bold(true).Foreground(colors.accent),
+		success:       lipgloss.NewStyle().Foreground(colors.success),
+		warning:       lipgloss.NewStyle().Foreground(colors.warning),
+		danger:        lipgloss.NewStyle().Foreground(colors.danger),
 	}
 }
 

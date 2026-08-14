@@ -162,6 +162,9 @@ type model struct {
 	syncDiffLoading                                        bool
 	width, height                                          int
 	isDark                                                 bool
+	hoveredMouseTarget                                     mouseTarget
+	lastClickedMouseTarget                                 mouseTarget
+	lastMouseClickAt                                       time.Time
 	syncDiffSelection                                      int
 	syncDiffReturn                                         screen
 	pendingDiffProject, pendingDiffProfile                 string
@@ -392,6 +395,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.editor.SetStyles(textarea.DefaultStyles(m.isDark))
 		}
 		return m, nil
+
+	case tea.BlurMsg:
+		m.clearMouseFeedback()
+		return m, nil
+
+	case mouseInteractionMsg:
+		if m.busy {
+			return m, nil
+		}
+		return m.handleMouseInteraction(msg)
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -638,6 +651,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.info = ""
 		m.errText = ""
+		m.clearMouseFeedback()
 		return m.handleKey(msg)
 	}
 	if m.screen == screenEditor {

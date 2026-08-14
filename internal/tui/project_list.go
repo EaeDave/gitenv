@@ -20,7 +20,9 @@ func (item projectListItem) FilterValue() string {
 	return strings.Join([]string{item.state.Name, item.state.Path, item.state.Identity}, " ")
 }
 
-type projectListDelegate struct{}
+type projectListDelegate struct {
+	hoveredIndex int
+}
 
 func (projectListDelegate) Height() int  { return 1 }
 func (projectListDelegate) Spacing() int { return 0 }
@@ -28,20 +30,27 @@ func (projectListDelegate) Update(tea.Msg, *list.Model) tea.Cmd {
 	return nil
 }
 
-func (projectListDelegate) Render(writer io.Writer, model list.Model, index int, raw list.Item) {
+func (delegate projectListDelegate) Render(writer io.Writer, model list.Model, index int, raw list.Item) {
 	item, ok := raw.(projectListItem)
 	if !ok {
 		return
 	}
 	selected := index == model.Index()
+	hovered := index == delegate.hoveredIndex
 	marker := "  "
 	if selected {
 		marker = styles.selected.Render("› ")
+	} else if hovered {
+		marker = styles.hovered.Render("• ")
 	}
 
 	name := item.state.Name
-	if selected {
+	if selected && hovered {
+		name = styles.selected.Underline(true).Render(name)
+	} else if selected {
 		name = styles.selected.Render(name)
+	} else if hovered {
+		name = styles.hovered.Render(name)
 	} else {
 		name = styles.value.Render(name)
 	}
@@ -102,7 +111,7 @@ func projectStateLabel(state app.ProjectState) string {
 }
 
 func newProjectList(items []list.Item, width, height int, isDark bool) *list.Model {
-	projectList := list.New(items, projectListDelegate{}, max(24, width), max(5, height))
+	projectList := list.New(items, projectListDelegate{hoveredIndex: -1}, max(24, width), max(5, height))
 	projectList.SetShowTitle(false)
 	projectList.SetShowHelp(false)
 	projectList.SetShowStatusBar(true)
@@ -160,12 +169,15 @@ func (m *model) resizeProjectList() {
 	m.projectList.SetSize(m.projectListWidth(), m.projectListHeight())
 }
 
-func (m model) projectListWidth() int {
-	width := availableWidth(m.width)
+func projectListPanelWidth(width int) int {
 	if width >= compactViewWidth {
-		return max(32, width*2/5) - 4
+		return max(32, width*2/5)
 	}
-	return width - 4
+	return width
+}
+
+func (m model) projectListWidth() int {
+	return projectListPanelWidth(availableWidth(m.width)) - 4
 }
 
 func (m model) projectListHeight() int {
@@ -230,6 +242,11 @@ func (m model) projectListView(width, height int) string {
 		return m.renderLegacyProjectList()
 	}
 	copy := *m.projectList
+	hoveredIndex := -1
+	if m.hoveredMouseTarget.kind == mouseTargetProjectRow {
+		hoveredIndex = m.hoveredMouseTarget.index
+	}
+	copy.SetDelegate(projectListDelegate{hoveredIndex: hoveredIndex})
 	copy.SetSize(max(20, width), max(5, height))
 	return copy.View()
 }

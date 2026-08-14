@@ -14,9 +14,13 @@ import (
 )
 
 func (m model) View() tea.View {
-	view := tea.NewView(m.renderView())
+	content := m.renderView()
+	view := tea.NewView(content)
 	view.AltScreen = true
 	view.WindowTitle = "gitenv"
+	view.ReportFocus = true
+	view.MouseMode = tea.MouseModeAllMotion
+	view.OnMouse = mouseHandler(m.mouseRegions(content), m.hoveredMouseTarget)
 	return view
 }
 
@@ -187,6 +191,7 @@ func (m model) renderForm(title string, width int) string {
 	if hint := m.formHint(); hint != "" {
 		rows = append(rows, "", styles.muted.Render(hint))
 	}
+	rows = append(rows, "", m.renderMouseButtons(m.formMouseButtons()))
 	panel := renderPanel(title, strings.Join(rows, "\n"), panelWidth, true)
 	help := renderHelp("tab", "next field", "enter", "confirm", "ctrl+u", "clear", "esc", "cancel")
 	return lipgloss.JoinVertical(lipgloss.Left, panel, "", help)
@@ -305,10 +310,7 @@ func (m model) renderUnlockMenu(width int) string {
 }
 
 func (m model) renderProjects(width int) string {
-	listWidth := width
-	if width >= compactViewWidth {
-		listWidth = max(32, width*2/5)
-	}
+	listWidth := projectListPanelWidth(width)
 	projectList := m.projectListView(listWidth-4, m.projectListHeight())
 	count := len(m.projectStates)
 	if m.current.HasEnv && m.current.LinkedName == "" {
@@ -352,11 +354,12 @@ func (m model) renderProjectContext(width int) string {
 	valueWidth := max(18, width-18)
 	if item, ok := m.selectedProjectListItem(); ok {
 		if item.current {
-			return styles.warning.Render("● Current folder is not in gitenv yet") + "\n\n" +
+			context := styles.warning.Render("● Current folder is not in gitenv yet") + "\n\n" +
 				labelValue("Project", item.state.Name) + "\n" +
 				labelValue("Path", compactPath(item.state.Path, valueWidth)) + "\n" +
 				styles.success.Render("● .env found") + "\n\n" +
 				styles.key.Render("enter/a") + styles.muted.Render("  add and capture this project")
+			return context + "\n\n" + m.renderMouseButtons(m.projectMouseButtons())
 		}
 		state := item.state
 		lines := []string{
@@ -372,6 +375,7 @@ func (m model) renderProjectContext(width int) string {
 		if state.Name == m.current.LinkedName {
 			lines = append(lines, "", styles.success.Render("● current folder"))
 		}
+		lines = append(lines, "", m.renderMouseButtons(m.projectMouseButtons()))
 		return strings.Join(lines, "\n")
 	}
 
@@ -428,12 +432,16 @@ func (m model) renderProjectSyncStatus() string {
 	if recommendation != "" {
 		rows = append(rows, "", styles.label.Render("Next  ")+styles.value.Render(recommendation))
 	}
+	rows = append(rows, "", m.renderMouseButtons(syncMouseButtons()))
 	return strings.Join(rows, "\n")
 }
 
 func (m model) renderProfiles(width int) string {
 	local := m.cfg.Projects[m.selectedProject]
-	details := labelValue("Path", local.Path) + "\n" + labelValue("Active", valueOrNone(local.ActiveProfile)) + "\n" + styles.label.Render("Status  ") + renderStatus(m.statuses[m.selectedProject])
+	details := labelValue("Path", compactPath(local.Path, max(18, width/2))) + "\n" +
+		labelValue("Active", valueOrNone(local.ActiveProfile)) + "\n" +
+		styles.label.Render("Status  ") + renderStatus(m.statuses[m.selectedProject]) + "\n\n" +
+		m.renderProfileMouseButtons(width)
 	profiles := m.renderProfileList(local.ActiveProfile)
 	if width >= compactViewWidth {
 		listWidth := max(28, width/3)
@@ -441,7 +449,8 @@ func (m model) renderProfiles(width int) string {
 	} else {
 		profiles = lipgloss.JoinVertical(lipgloss.Left, renderPanel(m.selectedProject, details, width, false), "", renderPanel("Profiles", profiles, width, true))
 	}
-	syncPanel := renderPanel("Sync", m.renderSyncStatus(), width, false)
+	profileSync := m.renderSyncStatus() + "\n\n" + m.renderMouseButtons(syncMouseButtons())
+	syncPanel := renderPanel("Sync", profileSync, width, false)
 	help := renderHelp("enter", "apply", "e", "edit", "c", "capture", "n", "new", "d", "remove", "s", "sync", "o", "options", "?", "help", "esc", "back")
 	if m.isFocusedProject() {
 		help = renderHelp("enter", "apply", "e", "edit", "c", "capture", "n", "new", "d", "remove", "s", "sync", "o", "options", "?", "help", "p", "all projects", "q", "quit")
@@ -457,8 +466,15 @@ func (m model) renderProfileList(activeProfile string) string {
 	rows := make([]string, 0, len(m.profiles))
 	for index, profile := range m.profiles {
 		label := "  " + profile
+		hovered := m.hoveredMouseTarget.kind == mouseTargetProfileRow && m.hoveredMouseTarget.index == index
 		if index == m.profileCursor {
-			label = styles.selected.Render("› " + profile)
+			selectedStyle := styles.selected
+			if hovered {
+				selectedStyle = selectedStyle.Underline(true)
+			}
+			label = selectedStyle.Render("› " + profile)
+		} else if hovered {
+			label = styles.hovered.Render("• " + profile)
 		}
 		rows = append(rows, label+profileBadge(profile == activeProfile, statuses[profile]))
 	}
@@ -534,7 +550,8 @@ func (m model) renderSyncConfirmation(width int) string {
 }
 
 func (m model) renderConfirmation(title, message string, width int) string {
-	body := styles.danger.Render("!") + "  " + styles.value.Render(message)
+	body := styles.danger.Render("!") + "  " + styles.value.Render(message) + "\n\n" +
+		m.renderMouseButtons(m.confirmationMouseButtons())
 	panel := renderPanel(title, body, min(width, 68), true)
 	return lipgloss.JoinVertical(lipgloss.Left, panel, "", renderHelp("y", "confirm", "n/esc", "cancel"))
 }
@@ -631,6 +648,7 @@ func (m model) renderRecoveryPrompt(width int) string {
 	if hint := m.formHint(); hint != "" {
 		rows = append(rows, "", styles.muted.Render(hint))
 	}
+	rows = append(rows, "", m.renderMouseButtons(m.formMouseButtons()))
 	panel := renderPanel("Vault created", strings.Join(rows, "\n"), panelWidth, true)
 	help := renderHelp("enter", "save", "ctrl+u", "clear", "esc", "skip for now")
 	return lipgloss.JoinVertical(lipgloss.Left, panel, "", help)
