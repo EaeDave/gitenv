@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 
 	"github.com/eaedave/gitenv/internal/envdiff"
 )
@@ -28,9 +28,15 @@ func (m model) renderCapturePreview(width int) string {
 			rows = append(rows, styles.warning.Render(fmt.Sprintf("! %d unrecognized line change(s)", m.captureDiff.UnknownChanges)))
 		}
 	}
-	rows = append(rows, "", styles.muted.Render("Values are hidden. Capture preserves the file byte for byte."))
+	rows = append(rows,
+		"",
+		styles.muted.Render("Values are hidden here. Press e to inspect or edit the local .env."),
+		styles.muted.Render("Capture preserves the file byte for byte."),
+		"",
+		m.renderMouseButtons(m.confirmationMouseButtons()),
+	)
 	panel := renderPanel("Capture local .env changes?", strings.Join(rows, "\n"), min(width, 76), true)
-	return lipgloss.JoinVertical(lipgloss.Left, panel, "", renderHelp("y", "capture", "n/esc", "cancel"))
+	return lipgloss.JoinVertical(lipgloss.Left, panel, "", renderHelp("enter/y", "capture", "e", "inspect/edit", "n/esc", "cancel"))
 }
 
 func renderCaptureChange(change envdiff.Change) string {

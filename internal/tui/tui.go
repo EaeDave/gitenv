@@ -11,9 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textarea"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textarea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/eaedave/gitenv/internal/app"
 	"github.com/eaedave/gitenv/internal/envdiff"
@@ -135,11 +136,14 @@ type model struct {
 	profileStatuses                                        map[string]map[string]string
 	projects, profiles                                     []string
 	projectStates                                          []app.ProjectState
+	projectList                                            *list.Model
 	adoptName, adoptPath                                   string
 	adoptCandidates, adoptProfiles                         []string
 	adoptReturn                                            screen
 	projectCursor, profileCursor, menuCursor, fieldCursor  int
+	projectFilter                                          projectFilter
 	selectedProject, pendingProfile, pendingProject        string
+	openProjectAfterReload                                 string
 	pendingSync                                            gitops.SyncState
 	pendingCapture                                         captureIntent
 	captureDiff                                            envdiff.Diff
@@ -158,6 +162,10 @@ type model struct {
 	syncLineDiff                                           *app.SyncLineDiff
 	syncDiffLoading                                        bool
 	width, height                                          int
+	isDark                                                 bool
+	hoveredMouseTarget                                     mouseTarget
+	lastClickedMouseTarget                                 mouseTarget
+	lastMouseClickAt                                       time.Time
 	syncDiffSelection                                      int
 	syncDiffReturn                                         screen
 	pendingDiffProject, pendingDiffProfile                 string
@@ -165,8 +173,9 @@ type model struct {
 	editor                                                 textarea.Model
 	editorRaw                                              []byte
 	editorBase                                             []byte
-	editorProject, editorBaseProfile                       string
+	editorProject, editorPath, editorBaseProfile           string
 	editorCRLF, editorTrailingNewline, editorBaseAvailable bool
+	editorTopLine, editorHorizontalOffset                  int
 	editorReturn                                           screen
 	version                                                string
 	updateLatest                                           string
@@ -196,7 +205,7 @@ func newModel(cfg *vault.LocalConfig, cwd, version string) model {
 	activity := spinner.New()
 	activity.Spinner = spinner.Dot
 	activity.Style = styles.warning
-	m := model{cfg: cfg, cwd: cwd, version: version, statuses: map[string]string{}, spinner: activity, syncStatus: gitops.SyncStatus{State: gitops.SyncChecking}}
+	m := model{cfg: cfg, cwd: cwd, version: version, statuses: map[string]string{}, spinner: activity, syncStatus: gitops.SyncStatus{State: gitops.SyncChecking}, isDark: true}
 	current, err := app.DetectCurrent(*cfg, cwd)
 	if err == nil {
 		m.current = current
@@ -210,6 +219,7 @@ func newModel(cfg *vault.LocalConfig, cwd, version string) model {
 	default:
 		m.screen = screenProjects
 	}
+	m.projectList = newProjectList(m.projectListItems(), m.projectListWidth(), m.projectListHeight(), m.isDark)
 	return m
 }
 
@@ -228,7 +238,7 @@ func syncRefreshTick() tea.Cmd {
 }
 
 func (m model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.spinner.Tick, syncRefreshTick()}
+	cmds := []tea.Cmd{m.spinner.Tick, syncRefreshTick(), tea.RequestBackgroundColor}
 	if !update.Disabled() && update.IsRelease(m.version) {
 		cmds = append(cmds, checkUpdateCmd(m.version))
 	}
@@ -376,9 +386,32 @@ func opCmd(fn func() error, info string) tea.Cmd {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		m.isDark = msg.IsDark()
+		applyTheme(m.isDark)
+		m.spinner.Style = styles.warning
+		if m.projectList != nil {
+			m.projectList.Styles = list.DefaultStyles(m.isDark)
+		}
+		if m.screen == screenEditor {
+			m.editor.SetStyles(textarea.DefaultStyles(m.isDark))
+		}
+		return m, nil
+
+	case tea.BlurMsg:
+		m.clearMouseFeedback()
+		return m, nil
+
+	case mouseInteractionMsg:
+		if m.busy {
+			return m, nil
+		}
+		return m.handleMouseInteraction(msg)
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.resizeProjectList()
 		m = m.applyEditorSize()
 		return m, nil
 
@@ -389,6 +422,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case syncStatusMsg:
 		m.syncStatus, m.syncInventory = msg.status, msg.inventory
+		m.resizeProjectList()
 		return m, nil
 
 	case syncRefreshTickMsg:
@@ -508,12 +542,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.manifest = msg.manifest
 		m.statuses = msg.statuses
 		m.profileStatuses = msg.profileStatuses
+		m.current = msg.current
 		m.projectStates = app.ProjectStates(*m.cfg, m.manifest, m.statuses)
 		m.projects = projectNames(m.projectStates)
+		m.refreshProjectList()
 		if m.projectCursor >= len(m.projects) {
 			m.projectCursor = max(0, len(m.projects)-1)
 		}
-		m.current = msg.current
 		m.remoteURL = msg.remoteURL
 		m.remoteDisplayURL = msg.remoteDisplayURL
 		if m.selectedProject != "" {
@@ -550,6 +585,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.accessRequired = false
 		m.migrationRecoveryRequired = false
+		if m.openProjectAfterReload != "" {
+			if project, ok := m.manifest.Projects[m.openProjectAfterReload]; ok {
+				m.selectedProject = m.openProjectAfterReload
+				m.profiles = sortedKeys(project.Profiles)
+				m.profileCursor = 0
+				m.screen = screenProfiles
+				m.openProjectAfterReload = ""
+			}
+		}
 		m.pendingApprovals = app.PendingApprovals(*m.cfg, m.manifest)
 		if m.approvalCursor >= len(m.pendingApprovals) {
 			m.approvalCursor = max(0, len(m.pendingApprovals)-1)
@@ -569,6 +613,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case operationMsg:
 		m.busy = false
 		if msg.err != nil {
+			m.openProjectAfterReload = ""
 			m.errText = safeError(msg.err)
 			return m, nil
 		}
@@ -599,7 +644,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(loadCmd(m.cfg, m.cwd), inspectSyncCmd(m.cfg))
 		}
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if m.busy {
 			if msg.String() == "ctrl+c" {
 				return m, tea.Quit
@@ -608,11 +653,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.info = ""
 		m.errText = ""
+		m.clearMouseFeedback()
 		return m.handleKey(msg)
 	}
 	if m.screen == screenEditor {
 		var cmd tea.Cmd
 		m.editor, cmd = m.editor.Update(msg)
+		return m, cmd
+	}
+	if m.screen == screenProjects && m.projectList != nil {
+		updated, cmd := m.projectList.Update(msg)
+		*m.projectList = updated
+		m.syncProjectCursor()
 		return m, cmd
 	}
 	return m, nil
@@ -642,7 +694,7 @@ func Run(cfg *vault.LocalConfig, cwd, version string) (string, error) {
 	if cfg == nil {
 		return "", errors.New("gitenv tui: config must not be nil")
 	}
-	program := tea.NewProgram(newModel(cfg, cwd, version), tea.WithAltScreen())
+	program := tea.NewProgram(newModel(cfg, cwd, version))
 	final, err := program.Run()
 	if err != nil {
 		return "", fmt.Errorf("gitenv tui: %w", err)

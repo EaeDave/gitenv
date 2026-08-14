@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/eaedave/gitenv/internal/vault"
 )
@@ -31,7 +31,7 @@ func TestLowercaseDOpensDevices(t *testing.T) {
 	cfg := vault.LocalConfig{VaultPath: "/vault", Projects: map[string]vault.LocalProject{}}
 	m := model{cfg: &cfg, screen: screenProjects}
 
-	next, cmd := m.projectsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	next, cmd := m.projectsKey(tea.KeyPressMsg{Code: 'd', Text: "d"})
 	got := next.(model)
 	if cmd != nil || got.screen != screenDevices {
 		t.Fatalf("lowercase d did not open devices: screen=%v cmd=%v", got.screen, cmd)
@@ -61,7 +61,7 @@ func TestEnterOnPendingRequestConfirms(t *testing.T) {
 	m := twoPendingModel()
 	m.approvalCursor = 1
 
-	next, cmd := m.devicesKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.devicesKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got := next.(model)
 	if cmd != nil {
 		t.Fatalf("opening the confirmation must not start a command")
@@ -81,7 +81,7 @@ func TestXOnPendingRequestConfirmsRejection(t *testing.T) {
 	m := twoPendingModel()
 	m.approvalCursor = 1
 
-	next, cmd := m.devicesKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	next, cmd := m.devicesKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	got := next.(model)
 	if cmd != nil || got.screen != screenConfirmReject {
 		t.Fatalf("x did not open rejection confirmation: screen=%v cmd=%v", got.screen, cmd)
@@ -99,13 +99,13 @@ func TestConfirmRejectStartsOnlyOnYes(t *testing.T) {
 	m.screen = screenConfirmReject
 	m.approvalCursor = 0
 
-	next, cmd := m.confirmRejectKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	next, cmd := m.confirmRejectKey(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	got := next.(model)
 	if cmd == nil || !got.busy || got.screen != screenDevices {
 		t.Fatalf("y did not start rejection: screen=%v busy=%v cmd=%v", got.screen, got.busy, cmd)
 	}
 
-	next, cmd = m.confirmRejectKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	next, cmd = m.confirmRejectKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	got = next.(model)
 	if cmd != nil || got.busy || got.screen != screenDevices || got.info != "cancelled" {
 		t.Fatalf("cancel started or lost rejection state: screen=%v busy=%v info=%q cmd=%v", got.screen, got.busy, got.info, cmd)
@@ -120,7 +120,7 @@ func TestConfirmApproveStartsOperationOnlyOnYes(t *testing.T) {
 	m.screen = screenConfirmApprove
 	m.approvalCursor = 0
 
-	next, cmd := m.confirmApproveKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	next, cmd := m.confirmApproveKey(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	got := next.(model)
 	if cmd == nil || !got.busy {
 		t.Fatalf("y did not start an approval operation: cmd=%v busy=%v", cmd, got.busy)
@@ -129,7 +129,7 @@ func TestConfirmApproveStartsOperationOnlyOnYes(t *testing.T) {
 		t.Fatalf("approval should return to the devices roster: screen=%v", got.screen)
 	}
 
-	next, cmd = m.confirmApproveKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	next, cmd = m.confirmApproveKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	got = next.(model)
 	if cmd != nil || got.busy {
 		t.Fatalf("cancelling must not start an operation: cmd=%v busy=%v", cmd, got.busy)
@@ -150,7 +150,7 @@ func TestDevicesEmptyStateActionsAreNoops(t *testing.T) {
 		t.Fatalf("empty state did not explain where requests come from:\n%s", out)
 	}
 
-	next, cmd := m.devicesKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.devicesKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got := next.(model)
 	if cmd != nil {
 		t.Fatalf("enter with no pending request must not start a command")
@@ -158,7 +158,7 @@ func TestDevicesEmptyStateActionsAreNoops(t *testing.T) {
 	if got.screen != screenDevices {
 		t.Fatalf("enter with no pending request should stay put: screen=%v", got.screen)
 	}
-	next, cmd = m.devicesKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	next, cmd = m.devicesKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	got = next.(model)
 	if cmd != nil || got.screen != screenDevices {
 		t.Fatalf("x with no pending request must stay put: screen=%v cmd=%v", got.screen, cmd)

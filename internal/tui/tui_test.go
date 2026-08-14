@@ -7,8 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/eaedave/gitenv/internal/app"
 	"github.com/eaedave/gitenv/internal/envdiff"
@@ -31,7 +32,7 @@ func TestOnboardingAndContextualAddFlow(t *testing.T) {
 	if m.screen != screenOnboarding || !m.current.HasEnv {
 		t.Fatalf("unexpected initial state: screen=%v current=%#v", m.screen, m.current)
 	}
-	next, _ := m.onboardingKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ := m.onboardingKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(model)
 	if m.screen != screenCreate || len(m.fields) != 5 {
 		t.Fatalf("create wizard not opened: screen=%v fields=%d", m.screen, len(m.fields))
@@ -52,7 +53,7 @@ func TestOnboardingAndContextualAddFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.current = current
-	next, _ = m.projectsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	next, _ = m.projectsKey(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	m = next.(model)
 	if m.screen != screenAddProject || m.fields[0].value != "my-api" || m.fields[1].value != "dev" {
 		t.Fatalf("add wizard defaults wrong: %#v", m.fields)
@@ -67,7 +68,9 @@ func TestOnboardingAndContextualAddFlow(t *testing.T) {
 	if m.screen != screenConfirmCapture {
 		t.Fatalf("capture preview not opened: screen=%v", m.screen)
 	}
-	next, cmd = m.confirmCaptureKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	// Enter confirms the highlighted primary action; requiring only y made the
+	// add-project flow look complete while silently cancelling the capture.
+	next, cmd = m.confirmCaptureKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	msg = cmd()
 	if result := msg.(operationMsg); result.err != nil {
 		t.Fatal(result.err)
@@ -88,7 +91,7 @@ func TestAddDoesNotSuggestUnrelatedVaultProject(t *testing.T) {
 			"api": {Profiles: map[string]vault.Profile{"prod": {}}},
 		}},
 	}
-	next, _ := m.projectsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	next, _ := m.projectsKey(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	got := next.(model)
 	if got.screen != screenAddProject || got.fields[0].value != "different-folder" || got.fields[1].value != "dev" {
 		t.Fatalf("unrelated vault project leaked into defaults: %#v", got.fields)
@@ -100,7 +103,7 @@ func TestProjectAndProfileKeyBindings(t *testing.T) {
 	m := model{cfg: &cfg, screen: screenProjects, projects: []string{"api"}, statuses: map[string]string{"api": "clean"}}
 	for key, wantScreen := range map[rune]screen{'g': screenRemote, 'b': screenRecovery} {
 		copy := m
-		next, _ := copy.projectsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+		next, _ := copy.projectsKey(tea.KeyPressMsg{Code: key, Text: string(key)})
 		if next.(model).screen != wantScreen {
 			t.Fatalf("key %q did not open screen %v", key, wantScreen)
 		}
@@ -108,18 +111,18 @@ func TestProjectAndProfileKeyBindings(t *testing.T) {
 	m.screen = screenProfiles
 	m.selectedProject = "api"
 	m.profiles = []string{"dev"}
-	next, _ := m.profilesKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	next, _ := m.profilesKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	if next.(model).screen != screenNewProfile {
 		t.Fatal("n did not open new profile form")
 	}
 	m.profiles = []string{"prod"}
-	next, _ = m.profilesKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	next, _ = m.profilesKey(tea.KeyPressMsg{Code: 'd', Text: "d"})
 	got := next.(model)
 	if got.screen != screenConfirmDelete || got.pendingProfile != "prod" {
 		t.Fatalf("d did not request profile removal: %#v", got)
 	}
 	m.profiles = []string{"dev"}
-	next, _ = m.profilesKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	next, _ = m.profilesKey(tea.KeyPressMsg{Code: 'd', Text: "d"})
 	got = next.(model)
 	if got.screen != screenProfiles || got.errText == "" {
 		t.Fatalf("active profile removal was not blocked: %#v", got)
@@ -143,7 +146,7 @@ func TestRemoteMenuFlow(t *testing.T) {
 	m := model{cfg: &cfg, screen: screenProjects, projects: []string{}}
 
 	// g always opens the remote menu regardless of whether a remote exists.
-	next, _ := m.projectsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	next, _ := m.projectsKey(tea.KeyPressMsg{Code: 'g', Text: "g"})
 	m = next.(model)
 	if m.screen != screenRemote {
 		t.Fatalf("g did not open remote menu; got screen %v", m.screen)
@@ -155,7 +158,7 @@ func TestRemoteMenuFlow(t *testing.T) {
 	// Change (cursor 0) with a cached prefill URL opens screenRemoteChange prefilled.
 	m.remoteURL = "https://example.com/vault.git"
 	m.menuCursor = 0
-	next, _ = m.remoteMenuKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = m.remoteMenuKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(model)
 	if m.screen != screenRemoteChange {
 		t.Fatalf("Change did not open screenRemoteChange; got %v", m.screen)
@@ -165,7 +168,7 @@ func TestRemoteMenuFlow(t *testing.T) {
 	}
 
 	// Esc from the Change form returns to the remote menu (not projects).
-	next, _ = m.formKey(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = m.formKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = next.(model)
 	if m.screen != screenRemote {
 		t.Fatalf("esc from Change form did not return to remote menu; got %v", m.screen)
@@ -173,7 +176,7 @@ func TestRemoteMenuFlow(t *testing.T) {
 
 	// Remove (cursor 2) opens the confirmation screen.
 	m.menuCursor = 2
-	next, _ = m.remoteMenuKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = m.remoteMenuKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(model)
 	if m.screen != screenConfirmRemoveRemote {
 		t.Fatalf("Remove did not open screenConfirmRemoveRemote; got %v", m.screen)
@@ -181,14 +184,14 @@ func TestRemoteMenuFlow(t *testing.T) {
 
 	// Back (cursor 3) returns to projects.
 	m2 := model{cfg: &cfg, screen: screenRemote, menuCursor: 3}
-	next, _ = m2.remoteMenuKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = m2.remoteMenuKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if next.(model).screen != screenProjects {
 		t.Fatalf("Back did not return to projects; got %v", next.(model).screen)
 	}
 
 	// Test (cursor 1) stays on remote menu (screen unchanged after opCmd result).
 	m3 := model{cfg: &cfg, screen: screenRemote, menuCursor: 1}
-	next, _ = m3.remoteMenuKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = m3.remoteMenuKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got := next.(model)
 	if !got.busy {
 		t.Fatalf("Test did not set busy flag")
@@ -207,7 +210,7 @@ func TestRemoteRemoveConfirmation(t *testing.T) {
 	m := model{cfg: &cfg, screen: screenConfirmRemoveRemote}
 
 	// N (or any non-y) cancels and returns to the remote menu.
-	next, _ := m.confirmRemoveRemoteKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	next, _ := m.confirmRemoveRemoteKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	got := next.(model)
 	if got.screen != screenRemote {
 		t.Fatalf("n did not return to remote menu; got %v", got.screen)
@@ -217,7 +220,7 @@ func TestRemoteRemoveConfirmation(t *testing.T) {
 	}
 
 	// y sets busy and returns an opCmd (real git op, not executed in this test).
-	next, _ = m.confirmRemoveRemoteKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	next, _ = m.confirmRemoveRemoteKey(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	got = next.(model)
 	if !got.busy {
 		t.Fatalf("y did not set busy for Remove")
@@ -234,7 +237,7 @@ func TestAddSuggestsSameBasenameVaultProject(t *testing.T) {
 			"api": {Profiles: map[string]vault.Profile{"prod": {}}},
 		}},
 	}
-	next, _ := m.projectsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	next, _ := m.projectsKey(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	got := next.(model)
 	if got.fields[0].value != "api" || got.fields[1].value != "prod" {
 		t.Fatalf("same-basename project was not suggested: %#v", got.fields)
@@ -335,7 +338,7 @@ func TestUnlockMenuRouting(t *testing.T) {
 
 	// Option 0 → screenUnlockPassword with a single masked field.
 	got.menuCursor = 0
-	next, _ = got.unlockMenuKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = got.unlockMenuKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	pw := next.(model)
 	if pw.screen != screenUnlockPassword {
 		t.Fatalf("option 0 did not open screenUnlockPassword; got %v", pw.screen)
@@ -344,14 +347,14 @@ func TestUnlockMenuRouting(t *testing.T) {
 		t.Fatalf("unlock password field not masked: %#v", pw.fields)
 	}
 	// Esc returns to unlock menu.
-	back, _ := pw.formKey(tea.KeyMsg{Type: tea.KeyEsc})
+	back, _ := pw.formKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if back.(model).screen != screenUnlock {
 		t.Fatalf("esc from unlock password did not return to screenUnlock")
 	}
 
 	// Option 1 (no pending) → screenEnrollRequest.
 	got.menuCursor = 1
-	next, _ = got.unlockMenuKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = got.unlockMenuKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	enroll := next.(model)
 	if enroll.screen != screenEnrollRequest {
 		t.Fatalf("option 1 (no pending) did not open screenEnrollRequest; got %v", enroll.screen)
@@ -360,7 +363,7 @@ func TestUnlockMenuRouting(t *testing.T) {
 	// Option 1 with pending enrollment → sets busy (ActivateDeviceEnrollment).
 	got.cfg.PendingEnrollmentID = "req-abc123"
 	got.menuCursor = 1
-	next, _ = got.unlockMenuKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = got.unlockMenuKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	activate := next.(model)
 	if !activate.busy {
 		t.Fatalf("option 1 (pending) did not set busy for ActivateDeviceEnrollment")
@@ -369,7 +372,7 @@ func TestUnlockMenuRouting(t *testing.T) {
 	// Option 2 → screenImportRecovery.
 	got.cfg.PendingEnrollmentID = ""
 	got.menuCursor = 2
-	next, _ = got.unlockMenuKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = got.unlockMenuKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	imp := next.(model)
 	if imp.screen != screenImportRecovery {
 		t.Fatalf("option 2 did not open screenImportRecovery; got %v", imp.screen)
@@ -383,7 +386,7 @@ func TestUnlockMenuRouting(t *testing.T) {
 
 	// Option 3 → explicit local disconnect confirmation.
 	got.menuCursor = 3
-	next, _ = got.unlockMenuKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = got.unlockMenuKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if disconnect := next.(model); disconnect.screen != screenConfirmDisconnect {
 		t.Fatalf("option 3 did not open disconnect confirmation; got %v", disconnect.screen)
 	}
@@ -394,7 +397,7 @@ func TestUnlockMenuRouting(t *testing.T) {
 // menu now says "quit" instead of promising a "back" that only printed an error.
 func TestAccessGateCannotBeBypassed(t *testing.T) {
 	cfg := vault.LocalConfig{VaultPath: "/vault", Projects: map[string]vault.LocalProject{}}
-	for _, key := range []tea.KeyMsg{{Type: tea.KeyEsc}, {Type: tea.KeyRunes, Runes: []rune{'q'}}} {
+	for _, key := range []tea.KeyPressMsg{{Code: tea.KeyEsc}, {Code: 'q', Text: "q"}} {
 		m := model{cfg: &cfg, screen: screenUnlock, accessRequired: true}
 		next, cmd := m.unlockMenuKey(key)
 		got := next.(model)
@@ -408,12 +411,12 @@ func TestAccessGateCannotBeBypassed(t *testing.T) {
 	// Cancelling the migration form returns to the unlock menu, which offers a
 	// real way out. It must never reach the project list.
 	m := model{cfg: &cfg, screen: screenMigrate, accessRequired: true, fields: []field{{"Master password", "secret", true}}}
-	next, cmd := m.formKey(tea.KeyMsg{Type: tea.KeyEsc})
+	next, cmd := m.formKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if got := next.(model); cmd != nil || got.screen != screenUnlock {
 		t.Fatalf("migration escape did not return to the locked menu: screen=%v cmd=%v", got.screen, cmd)
 	}
 	m = model{cfg: &cfg, screen: screenImportRecovery, accessRequired: true, migrationRecoveryRequired: true, fields: []field{{"Recovery key", "", true}}}
-	next, cmd = m.formKey(tea.KeyMsg{Type: tea.KeyEsc})
+	next, cmd = m.formKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if got := next.(model); cmd != nil || got.screen != screenUnlock {
 		t.Fatalf("recovery escape did not return to locked menu: screen=%v cmd=%v", got.screen, cmd)
 	}
@@ -424,7 +427,7 @@ func TestDisconnectConfirmationReturnsToOnboarding(t *testing.T) {
 	t.Setenv("GITENV_CONFIG_DIR", filepath.Join(root, "config"))
 	cfg := vault.LocalConfig{VaultPath: filepath.Join(root, "vault"), Projects: map[string]vault.LocalProject{"api": {Path: root}}}
 	m := model{cfg: &cfg, screen: screenConfirmDisconnect, accessRequired: true}
-	next, cmd := m.confirmDisconnectKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	next, cmd := m.confirmDisconnectKey(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	got := next.(model)
 	if got.screen != screenOnboarding || !got.busy || cmd == nil {
 		t.Fatalf("disconnect confirmation did not enter onboarding: %#v", got)
@@ -466,9 +469,31 @@ func TestMigrationRejectsUnauthorizedLoadedIdentity(t *testing.T) {
 func TestPasswordFieldsRenderMasked(t *testing.T) {
 	cfg := vault.LocalConfig{}
 	m := model{cfg: &cfg, screen: screenUnlockPassword, fields: []field{{"Master password", "sëcret", true}}}
-	view := m.View()
+	view := m.View().Content
 	if strings.Contains(view, "sëcret") || !strings.Contains(view, "******") {
 		t.Fatalf("password was not masked: %q", view)
+	}
+}
+
+func TestProjectHelpFitsFortyColumnTerminal(t *testing.T) {
+	help := (model{}).renderProjectsHelp(40)
+	lines := strings.Split(help, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("narrow help should use two rows, got %d: %q", len(lines), ansi.Strip(help))
+	}
+	// renderView adds two cells of padding on each side.
+	for _, line := range lines {
+		if width := ansi.StringWidth(line); width > 36 {
+			t.Fatalf("help row is %d cells wide in a 40-column terminal: %q", width, ansi.Strip(line))
+		}
+	}
+}
+
+func TestViewDeclaresBubbleTeaV2TerminalFeatures(t *testing.T) {
+	cfg := vault.LocalConfig{}
+	view := (model{cfg: &cfg}).View()
+	if !view.AltScreen || view.WindowTitle != "gitenv" {
+		t.Fatalf("v2 view did not declare terminal features: alt=%v title=%q", view.AltScreen, view.WindowTitle)
 	}
 }
 
@@ -498,23 +523,31 @@ func TestProjectViewAdaptsBetweenWideAndCompactLayouts(t *testing.T) {
 		current:       app.CurrentProject{Path: "/workspace/api", HasEnv: true, LinkedName: "api"},
 	}
 
+	m.isDark = true
+	m.refreshProjectList()
 	m.width = 108
-	wide := m.View()
+	m.resizeProjectList()
+	wide := ansi.Strip(m.View().Content)
 	m.width = 60
-	compact := m.View()
+	m.resizeProjectList()
+	compact := ansi.Strip(m.View().Content)
 	wideProjectsLine := lineContaining(t, wide, "Projects")
-	wideWorkspaceLine := lineContaining(t, wide, "Workspace")
-	compactProjectsLine := lineContaining(t, compact, "Projects")
-	compactWorkspaceLine := lineContaining(t, compact, "Workspace")
-	if wideProjectsLine != wideWorkspaceLine {
+	wideDetailsLine := lineContaining(t, wide, "Details")
+	_ = lineContaining(t, compact, "Projects")
+	if wideProjectsLine != wideDetailsLine {
 		t.Fatalf("wide layout did not place panels side by side:\n%s", wide)
 	}
-	if compactProjectsLine == compactWorkspaceLine {
-		t.Fatalf("compact layout did not stack panels:\n%s", compact)
+	if strings.Contains(compact, "Details") {
+		t.Fatalf("compact layout kept the details panel above the fold:\n%s", compact)
 	}
-	for _, text := range []string{"api", "/workspace/api", ".env found", "linked: api"} {
+	for _, text := range []string{"api", "up to date"} {
 		if !strings.Contains(wide, text) || !strings.Contains(compact, text) {
 			t.Fatalf("responsive view lost %q", text)
+		}
+	}
+	for _, text := range []string{"/workspace/api", "current folder"} {
+		if !strings.Contains(wide, text) {
+			t.Fatalf("wide details lost %q", text)
 		}
 	}
 }
@@ -572,7 +605,7 @@ func TestSyncPanelSeparatesEnvironmentAndRemoteState(t *testing.T) {
 		remoteDisplayURL: "github.com/example/vault",
 		syncStatus:       gitops.SyncStatus{State: gitops.SyncRemoteAhead, Behind: 2},
 	}
-	view := m.View()
+	view := m.View().Content
 	for _, text := range []string{"Sync", "↓ 2 remote update(s)", "Press s to download", "Local .env files"} {
 		if text == "Local .env files" {
 			continue
@@ -598,11 +631,11 @@ func TestContextualSyncRequiresConfirmation(t *testing.T) {
 		if cmd != nil || got.screen != screenConfirmSync || got.pendingSync != tc.state {
 			t.Fatalf("state %q did not request confirmation: %#v", tc.state, got)
 		}
-		view := got.View()
+		view := got.View().Content
 		if !strings.Contains(view, tc.want) || !strings.Contains(view, "Local .env files will not be modified") {
 			t.Fatalf("confirmation for %q is unclear:\n%s", tc.state, view)
 		}
-		cancelled, cancelCmd := got.confirmSyncKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+		cancelled, cancelCmd := got.confirmSyncKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
 		if cancelCmd != nil || cancelled.(model).screen != screenProjects {
 			t.Fatalf("sync cancellation failed: %#v", cancelled)
 		}
@@ -679,10 +712,10 @@ func TestNewProfileRequiresPreviewAndCancellationCreatesNothing(t *testing.T) {
 	}
 	next, _ = next.(model).Update(preview)
 	m = next.(model)
-	if m.screen != screenConfirmCapture || strings.Contains(m.View(), "secret-value") {
-		t.Fatalf("new profile preview unsafe or missing:\n%s", m.View())
+	if m.screen != screenConfirmCapture || strings.Contains(m.View().Content, "secret-value") {
+		t.Fatalf("new profile preview unsafe or missing:\n%s", m.View().Content)
 	}
-	cancelled, cancelCmd := m.confirmCaptureKey(tea.KeyMsg{Type: tea.KeyEsc})
+	cancelled, cancelCmd := m.confirmCaptureKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if cancelCmd != nil || cancelled.(model).screen != screenProfiles {
 		t.Fatalf("new profile cancellation failed: %#v", cancelled)
 	}
@@ -743,7 +776,7 @@ func TestCapturePreviewHidesValuesAndWritesOnlyAfterConfirmation(t *testing.T) {
 	}
 	updated, _ := next.(model).Update(preview)
 	m = updated.(model)
-	view := m.View()
+	view := m.View().Content
 	for _, key := range []string{"API_KEY", "DEBUG", "ADDED", "REMOVED", "Values are hidden"} {
 		if !strings.Contains(view, key) {
 			t.Fatalf("capture preview missing %q:\n%s", key, view)
@@ -754,7 +787,20 @@ func TestCapturePreviewHidesValuesAndWritesOnlyAfterConfirmation(t *testing.T) {
 			t.Fatalf("capture preview exposed secret %q:\n%s", secret, view)
 		}
 	}
-	cancelled, cancelCmd := m.confirmCaptureKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if !strings.Contains(ansi.Strip(view), "e inspect/edit") {
+		t.Fatalf("capture preview does not advertise value inspection:\n%s", view)
+	}
+	editing, _ := m.confirmCaptureKey(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	m = editing.(model)
+	if m.screen != screenEditor || !strings.Contains(m.View().Content, "new-secret") || !strings.Contains(m.View().Content, "Diff vs dev") {
+		t.Fatalf("capture editor did not reveal the local value and captured baseline:\n%s", m.View().Content)
+	}
+	returned, _ := m.editorKey(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = returned.(model)
+	if m.screen != screenConfirmCapture || m.pendingProject != "api" || m.pendingProfile != "dev" {
+		t.Fatalf("editor did not return to capture confirmation: %#v", m)
+	}
+	cancelled, cancelCmd := m.confirmCaptureKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	if cancelCmd != nil || cancelled.(model).screen != screenProfiles {
 		t.Fatalf("capture cancellation failed: %#v", cancelled)
 	}
@@ -766,7 +812,7 @@ func TestCapturePreviewHidesValuesAndWritesOnlyAfterConfirmation(t *testing.T) {
 		t.Fatalf("cancelled preview changed profile checksum: %q", got)
 	}
 	m = updated.(model)
-	confirmed, captureCmd := m.confirmCaptureKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	confirmed, captureCmd := m.confirmCaptureKey(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	if !confirmed.(model).busy || captureCmd == nil {
 		t.Fatal("capture confirmation did not start capture")
 	}
@@ -799,7 +845,7 @@ func TestSyncPanelRendersAutomaticValueFreeInventory(t *testing.T) {
 			}}},
 		},
 	}
-	view := m.View()
+	view := m.View().Content
 	for _, expected := range []string{"Committed, not published", "api / prod", "DATABASE_URL", "Uncommitted vault changes", "+ worker / dev", "Values hidden"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("automatic sync diff missing %q:\n%s", expected, view)
@@ -820,7 +866,7 @@ func TestSyncPanelExplainsCommitWithoutVaultContentChanges(t *testing.T) {
 		syncStatus:    gitops.SyncStatus{State: gitops.SyncLocalAhead, Ahead: 1},
 		syncInventory: app.SyncInventory{Available: true},
 	}
-	view := m.View()
+	view := m.View().Content
 	if !strings.Contains(view, "↑ 1 commit(s), no vault content changes") {
 		t.Fatalf("commit-only summary missing:\n%s", view)
 	}
@@ -834,7 +880,7 @@ func TestSyncPanelFailsClosedWhenInventoryUnavailable(t *testing.T) {
 		syncStatus:    gitops.SyncStatus{State: gitops.SyncLocalAhead, Dirty: true},
 		syncInventory: app.SyncInventory{Detail: "change details unavailable"},
 	}
-	view := m.View()
+	view := m.View().Content
 	if !strings.Contains(view, "change details unavailable") || strings.Contains(view, "DATABASE_URL") {
 		t.Fatalf("unavailable inventory did not fail closed:\n%s", view)
 	}
@@ -864,12 +910,12 @@ func TestSyncDiffViewerOpensScrollsAndReturnsWithoutValues(t *testing.T) {
 		},
 	}
 
-	opened, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	opened, cmd := m.handleKey(tea.KeyPressMsg{Code: 'v', Text: "v"})
 	m = opened.(model)
 	if cmd != nil || m.screen != screenSyncDiff || m.syncDiffOffset != 0 {
 		t.Fatalf("v did not open diff viewer: %#v", m)
 	}
-	firstPage := m.View()
+	firstPage := m.View().Content
 	for _, expected := range []string{"Environment changes", "Local .env changes", "millennium-api-docs / prod", "LOCAL_KEY", "Lines 1–8 of", "esc/q", "back"} {
 		if !strings.Contains(firstPage, expected) {
 			t.Fatalf("diff viewer missing %q:\n%s", expected, firstPage)
@@ -879,9 +925,9 @@ func TestSyncDiffViewerOpensScrollsAndReturnsWithoutValues(t *testing.T) {
 		t.Fatalf("first page ignored viewport limit:\n%s", firstPage)
 	}
 
-	ended, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnd})
+	ended, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnd})
 	m = ended.(model)
-	lastPage := m.View()
+	lastPage := m.View().Content
 	if m.syncDiffOffset != m.syncDiffMaxOffset() || !strings.Contains(lastPage, "KEY_13") || !strings.Contains(lastPage, "Values hidden") {
 		t.Fatalf("end did not reveal final value-free page: offset=%d max=%d\n%s", m.syncDiffOffset, m.syncDiffMaxOffset(), lastPage)
 	}
@@ -891,7 +937,7 @@ func TestSyncDiffViewerOpensScrollsAndReturnsWithoutValues(t *testing.T) {
 		}
 	}
 
-	back, backCmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	back, backCmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if backCmd != nil || back.(model).screen != screenProjects || back.(model).syncDiffOffset != 0 {
 		t.Fatalf("esc did not return to dashboard: %#v", back)
 	}
@@ -908,10 +954,10 @@ func TestSyncDiffViewerClampsPagingAndShowsUnavailableState(t *testing.T) {
 		syncInventory:  app.SyncInventory{Detail: "change details unavailable"},
 		syncDiffOffset: 100,
 	}
-	next, _ := m.syncDiffKey(tea.KeyMsg{Type: tea.KeyPgDown})
+	next, _ := m.syncDiffKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
 	m = next.(model)
-	if m.syncDiffOffset != m.syncDiffMaxOffset() || !strings.Contains(m.View(), "change details unavailable") {
-		t.Fatalf("unavailable viewer did not clamp or fail closed: offset=%d max=%d\n%s", m.syncDiffOffset, m.syncDiffMaxOffset(), m.View())
+	if m.syncDiffOffset != m.syncDiffMaxOffset() || !strings.Contains(m.View().Content, "change details unavailable") {
+		t.Fatalf("unavailable viewer did not clamp or fail closed: offset=%d max=%d\n%s", m.syncDiffOffset, m.syncDiffMaxOffset(), m.View().Content)
 	}
 }
 
@@ -926,7 +972,7 @@ func TestSyncDiffViewerRevealsAndDiscardsLiteralValues(t *testing.T) {
 		syncInventory: app.SyncInventory{Available: true},
 	}
 
-	loading, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	loading, cmd := m.handleKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	m = loading.(model)
 	if cmd == nil || !m.syncDiffLoading || !m.busy {
 		t.Fatalf("x did not start explicit reveal: %#v", m)
@@ -938,7 +984,7 @@ func TestSyncDiffViewerRevealsAndDiscardsLiteralValues(t *testing.T) {
 		},
 	}}}})
 	m = revealed.(model)
-	view := m.View()
+	view := ansi.Strip(m.View().Content)
 	for _, expected := range []string{"Local .env values", `-    7 │ "API_KEY=old-secret"`, `+    7 │ "API_KEY=new-secret\x1b[31m"`, "Values visible", "x hide values"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("revealed viewer missing %q:\n%s", expected, view)
@@ -948,13 +994,13 @@ func TestSyncDiffViewerRevealsAndDiscardsLiteralValues(t *testing.T) {
 		t.Fatalf("terminal control sequence was rendered literally:\n%s", view)
 	}
 
-	hidden, hideCmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	hidden, hideCmd := m.handleKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	m = hidden.(model)
-	if hideCmd != nil || m.syncLineDiff != nil || strings.Contains(m.View(), "old-secret") {
-		t.Fatalf("second x did not discard plaintext: %#v\n%s", m, m.View())
+	if hideCmd != nil || m.syncLineDiff != nil || strings.Contains(m.View().Content, "old-secret") {
+		t.Fatalf("second x did not discard plaintext: %#v\n%s", m, m.View().Content)
 	}
 	m.syncLineDiff = &app.SyncLineDiff{LocalEnvs: []app.LocalEnvLineDelta{{Project: "api"}}}
-	closed, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	closed, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if closed.(model).syncLineDiff != nil || closed.(model).screen != screenProjects {
 		t.Fatalf("escape retained plaintext state: %#v", closed)
 	}
@@ -974,7 +1020,7 @@ func TestProfilesScreenHighlightsModifiedActiveProfile(t *testing.T) {
 		statuses:        map[string]string{"api": "modified"},
 		profileStatuses: map[string]map[string]string{"api": {"prod": "modified", "dev": ""}},
 	}
-	view := m.View()
+	view := m.View().Content
 	for _, expected := range []string{"● active", "modified", "Status"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("profiles view missing %q:\n%s", expected, view)
@@ -1003,7 +1049,7 @@ func TestProfilesScreenFlagsInactiveProfileMatchingDisk(t *testing.T) {
 		statuses:        map[string]string{"api": "modified"},
 		profileStatuses: map[string]map[string]string{"api": {"prod": "modified", "dev": "current"}},
 	}
-	view := m.View()
+	view := m.View().Content
 	if !strings.Contains(view, "○ matches .env") {
 		t.Fatalf("inactive matching profile not flagged:\n%s", view)
 	}
@@ -1023,38 +1069,38 @@ func TestSyncDiffViewerSelectsAndConfirmsOneEnvironmentAction(t *testing.T) {
 		}},
 	}
 
-	view := m.View()
+	view := ansi.Strip(m.View().Content)
 	for _, expected := range []string{"› api / dev", "  worker / prod", "tab select env", "p publish", "d discard"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("selected viewer missing %q:\n%s", expected, view)
 		}
 	}
-	selected, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	selected, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
 	m = selected.(model)
-	if m.syncDiffSelection != 1 || !strings.Contains(m.View(), "› worker / prod") {
-		t.Fatalf("tab did not select second environment: %#v\n%s", m, m.View())
+	if m.syncDiffSelection != 1 || !strings.Contains(m.View().Content, "› worker / prod") {
+		t.Fatalf("tab did not select second environment: %#v\n%s", m, m.View().Content)
 	}
 
-	publish, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	publish, cmd := m.handleKey(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	m = publish.(model)
 	if cmd != nil || m.screen != screenConfirmDiffPublish || m.pendingDiffProject != "worker" || m.pendingDiffProfile != "prod" {
 		t.Fatalf("publish did not target selected environment: %#v", m)
 	}
-	if !strings.Contains(m.View(), "Capture worker/prod") {
-		t.Fatalf("publish confirmation omitted target:\n%s", m.View())
+	if !strings.Contains(m.View().Content, "Capture worker/prod") {
+		t.Fatalf("publish confirmation omitted target:\n%s", m.View().Content)
 	}
-	cancelled, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	cancelled, _ := m.handleKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	m = cancelled.(model)
 	if m.screen != screenSyncDiff || m.pendingDiffProject != "" {
 		t.Fatalf("publish cancellation retained pending action: %#v", m)
 	}
 
-	discard, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	discard, cmd := m.handleKey(tea.KeyPressMsg{Code: 'd', Text: "d"})
 	m = discard.(model)
 	if cmd != nil || m.screen != screenConfirmDiffDiscard || m.pendingDiffProject != "worker" {
 		t.Fatalf("discard did not target selected environment: %#v", m)
 	}
-	confirmed, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	confirmed, cmd := m.handleKey(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	m = confirmed.(model)
 	if cmd == nil || !m.busy || m.screen != screenProjects || m.pendingDiffProject != "" {
 		t.Fatalf("discard confirmation did not start selected action: %#v", m)
@@ -1070,7 +1116,7 @@ func TestSyncDiffViewerBlocksPublishWhenVaultIsNotCleanAndSynced(t *testing.T) {
 			Project: "api", Profile: "dev", Diff: envdiff.Diff{Changes: []envdiff.Change{{Key: "KEY", Kind: envdiff.Changed}}},
 		}}},
 	}
-	next, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	next, cmd := m.handleKey(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	got := next.(model)
 	if cmd != nil || got.screen != screenSyncDiff || got.errText == "" {
 		t.Fatalf("unsafe selected publish was not blocked: %#v", got)
@@ -1104,7 +1150,7 @@ func TestFormHintsStateRulesBeforeSubmit(t *testing.T) {
 	if !strings.Contains(hint, "12 characters") {
 		t.Fatalf("create form does not state the password rule: %q", hint)
 	}
-	if view := create.View(); !strings.Contains(view, "12 characters") {
+	if view := create.View().Content; !strings.Contains(view, "12 characters") {
 		t.Fatalf("password rule is not rendered on the create screen:\n%s", view)
 	}
 

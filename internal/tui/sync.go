@@ -1,7 +1,7 @@
 package tui
 
 import (
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/eaedave/gitenv/internal/app"
 	gitops "github.com/eaedave/gitenv/internal/git"
@@ -38,7 +38,7 @@ func (m model) requestContextualSync() (tea.Model, tea.Cmd) {
 
 // syncActionsKey drives the explicit pull/push menu shown for a vault that is
 // already in sync.
-func (m model) syncActionsKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) syncActionsKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	target := screenProjects
 	if m.selectedProject != "" {
 		target = screenProfiles
@@ -65,7 +65,7 @@ func (m model) syncActionsKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) confirmSyncKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) confirmSyncKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	targetScreen := screenProjects
 	if m.selectedProject != "" {
 		targetScreen = screenProfiles

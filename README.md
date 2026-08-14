@@ -93,7 +93,11 @@ terms and status labels — the list below is only the everyday subset.
 Projects screen:
 
 ```text
-enter   open the project, or adopt it onto this computer
+↑↓/jk   move through the scrollable project list
+/       fuzzy-search projects by name, path, or repository
+tab     cycle all / modified / missing project filters
+enter   open the project, adopt it, or add the current folder when prompted
+a       add the current folder as a project
 c       capture the .env into a profile
 s       sync with the remote (contextual)
 v       open the change viewer
@@ -101,7 +105,6 @@ f       find local clones of vault projects
 o       project options (env file, line endings)
 b       save your recovery key
 d       devices and pending approvals
-a       add the current directory as a project
 g       sync repository settings
 ?       full keymap and glossary
 r       reload        q  quit
@@ -138,7 +141,16 @@ p / d             publish / discard the selected environment
 esc/q             back
 ```
 
-Inline editor: `ctrl+s` save, `esc` cancel, `enter` new line.
+Mouse: hover rows and buttons for feedback, click to select or activate,
+double-click a project/profile to open/apply it, and use the wheel to navigate
+lists. Mouse support is additive: every action remains available from the
+keyboard. Some terminals require holding `shift` while selecting terminal text
+when mouse tracking is active.
+
+Capture preview: `enter` or `y` confirms; `n` or `esc` cancels.
+Inline editor: click to move the cursor, use the wheel to scroll, `ctrl+s`
+save, `esc` cancel, and `enter` new line. Hold `shift` while dragging to
+select terminal text.
 Everywhere: `ctrl+c` quits, `U` installs an offered update.
 
 ## CLI

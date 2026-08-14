@@ -2,13 +2,16 @@ package tui
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textarea"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/eaedave/gitenv/internal/vault"
 )
@@ -38,6 +41,69 @@ func editorWithBase(base, buffer string, trailing bool) model {
 		editorBaseProfile:     "prod",
 		editorBaseAvailable:   true,
 	}
+}
+
+func TestEditorSeparatesKeysValuesCommentsAndShowsExposureState(t *testing.T) {
+	m, _ := openEditorModel(t, []byte("ACTIVE=one\nSECOND=two\n# disabled setting\n"))
+	m.editor.MoveToBegin()
+	m = m.ensureEditorCursorVisible()
+	view := m.renderEditor(80)
+	for _, styled := range []string{
+		styles.key.Render("SECOND"),
+		styles.muted.Render("="),
+		styles.value.Render("two"),
+		styles.muted.Render("# disabled setting"),
+		styles.warning.Render("● values visible"),
+	} {
+		if !strings.Contains(view, styled) {
+			t.Fatalf("editor missing semantic styling %q:\n%s", styled, view)
+		}
+	}
+	if !strings.Contains(ansi.Strip(view), "Line 1/3 · Col 1") {
+		t.Fatalf("editor missing cursor position:\n%s", ansi.Strip(view))
+	}
+	if renderedHeight := lipgloss.Height(m.View().Content); renderedHeight > m.height {
+		t.Fatalf("editor is %d lines in a %d-line terminal", renderedHeight, m.height)
+	}
+}
+
+func TestEditorMouseClickMovesCursorAndWheelScrolls(t *testing.T) {
+	lines := make([]string, 20)
+	for index := range lines {
+		lines[index] = fmt.Sprintf("KEY_%02d=value", index)
+	}
+	m, _ := openEditorModel(t, []byte(strings.Join(lines, "\n")+"\n"))
+	m.editor.MoveToBegin()
+	m = m.ensureEditorCursorVisible()
+	content := m.View().Content
+	row := editorRowRegionForIndex(t, m, content, 1)
+	m = dispatchViewMouse(t, m, tea.MouseClickMsg{X: row.target.contentLeft + 7, Y: row.bounds.y, Button: tea.MouseLeft})
+	if m.editor.Line() != 1 || m.editor.Column() != 7 {
+		t.Fatalf("mouse cursor = line %d col %d, want line 1 col 7", m.editor.Line(), m.editor.Column())
+	}
+	next, _ := m.editorKey(tea.KeyPressMsg{Code: 'X', Text: "X"})
+	m = next.(model)
+	if line := strings.Split(m.editor.Value(), "\n")[1]; line != "KEY_01=Xvalue" {
+		t.Fatalf("typing after click edited %q", line)
+	}
+
+	content = m.View().Content
+	row = editorRowRegionForIndex(t, m, content, 1)
+	m = dispatchViewMouse(t, m, tea.MouseWheelMsg{X: row.bounds.x, Y: row.bounds.y, Button: tea.MouseWheelDown})
+	if m.editorTopLine != 3 {
+		t.Fatalf("wheel top line = %d, want 3", m.editorTopLine)
+	}
+}
+
+func editorRowRegionForIndex(t *testing.T, m model, content string, line int) mouseRegion {
+	t.Helper()
+	for _, region := range m.mouseRegions(content) {
+		if region.target.kind == mouseTargetEditorRow && region.target.index == line {
+			return region
+		}
+	}
+	t.Fatalf("editor row %d not rendered", line)
+	return mouseRegion{}
 }
 
 func TestEditorRendersGitStyleDiffAgainstCapturedProfile(t *testing.T) {
@@ -127,10 +193,10 @@ func TestEditorRefusesContentItCannotPreserve(t *testing.T) {
 }
 
 func typeIntoEditor(m model, text string) model {
-	m2, _ := m.editorKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m2, _ := m.editorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = m2.(model)
 	for _, r := range text {
-		next, _ := m.editorKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		next, _ := m.editorKey(tea.KeyPressMsg{Code: r, Text: string(r)})
 		m = next.(model)
 	}
 	return m
@@ -146,7 +212,7 @@ func TestEditorSavesEditsWithFidelity(t *testing.T) {
 		t.Fatalf("editor without a captured baseline should say so:\n%s", view)
 	}
 
-	saved, cmd := m.editorKey(tea.KeyMsg{Type: tea.KeyCtrlS})
+	saved, cmd := m.editorKey(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	m = saved.(model)
 	if cmd == nil || m.screen != screenProfiles || m.info != ".env saved" {
 		t.Fatalf("save did not return to profiles: screen=%v info=%q", m.screen, m.info)
@@ -169,7 +235,7 @@ func TestEditorNoOpSaveWritesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	saved, cmd := m.editorKey(tea.KeyMsg{Type: tea.KeyCtrlS})
+	saved, cmd := m.editorKey(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	m = saved.(model)
 	if cmd != nil || m.screen != screenProfiles || m.info != "no changes to save" {
 		t.Fatalf("no-op save misbehaved: screen=%v info=%q cmd=%v", m.screen, m.info, cmd)
@@ -188,19 +254,19 @@ func TestEditorEscConfirmsBeforeDiscardingChanges(t *testing.T) {
 	m, dir := openEditorModel(t, original)
 	m = typeIntoEditor(m, "NEW=1")
 
-	prompted, _ := m.editorKey(tea.KeyMsg{Type: tea.KeyEsc})
+	prompted, _ := m.editorKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = prompted.(model)
 	if m.screen != screenConfirmEditorDiscard {
 		t.Fatalf("dirty esc did not prompt: screen=%v", m.screen)
 	}
-	kept, _ := m.confirmEditorDiscardKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	kept, _ := m.confirmEditorDiscardKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	m = kept.(model)
 	if m.screen != screenEditor || !m.editorDirty() {
 		t.Fatalf("declining discard lost edits: screen=%v", m.screen)
 	}
-	prompted, _ = m.editorKey(tea.KeyMsg{Type: tea.KeyEsc})
+	prompted, _ = m.editorKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = prompted.(model)
-	discarded, _ := m.confirmEditorDiscardKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	discarded, _ := m.confirmEditorDiscardKey(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	m = discarded.(model)
 	if m.screen != screenProfiles || m.editorProject != "" {
 		t.Fatalf("confirmed discard did not close editor: %#v", m)

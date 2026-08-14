@@ -3,7 +3,7 @@ package tui
 import (
 	"fmt"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/eaedave/gitenv/internal/app"
 	gitops "github.com/eaedave/gitenv/internal/git"
@@ -95,7 +95,7 @@ func (m model) requestDiffDiscard() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) confirmDiffActionKey(key tea.KeyMsg, publish bool) (tea.Model, tea.Cmd) {
+func (m model) confirmDiffActionKey(key tea.KeyPressMsg, publish bool) (tea.Model, tea.Cmd) {
 	if key.String() != "y" && key.String() != "Y" {
 		m.screen = screenSyncDiff
 		m.pendingDiffProject, m.pendingDiffProfile = "", ""
