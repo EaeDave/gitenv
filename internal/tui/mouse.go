@@ -34,6 +34,7 @@ const (
 	mouseActionProfileOptions
 	mouseActionSync
 	mouseActionReviewChanges
+	mouseActionEditCapture
 	mouseActionConfirm
 	mouseActionCancel
 	mouseActionContinue
@@ -140,7 +141,11 @@ func syncMouseButtons() []mouseButton {
 
 func (m model) confirmationMouseButtons() []mouseButton {
 	if m.screen == screenConfirmCapture {
-		return []mouseButton{{label: "Capture", action: mouseActionConfirm}, {label: "Cancel", action: mouseActionCancel}}
+		return []mouseButton{
+			{label: "Capture", action: mouseActionConfirm},
+			{label: "Edit .env", action: mouseActionEditCapture},
+			{label: "Cancel", action: mouseActionCancel},
+		}
 	}
 	return []mouseButton{{label: "Confirm", action: mouseActionConfirm}, {label: "Cancel", action: mouseActionCancel}}
 }

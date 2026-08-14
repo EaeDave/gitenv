@@ -3,6 +3,9 @@ package tui
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -11,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/eaedave/gitenv/internal/app"
+	"github.com/eaedave/gitenv/internal/vault"
 )
 
 const editorChromeHeight = 11
@@ -48,6 +52,31 @@ func (m model) openEditor(project string, back screen) (tea.Model, tea.Cmd) {
 		m.errText = safeError(err)
 		return m, nil
 	}
+	base, profile, available, _ := app.ReadActiveProfileEnv(*m.cfg, project)
+	return m.openEditorContent(project, "", raw, base, profile, available, back)
+}
+
+func (m model) openCaptureEditor() (tea.Model, tea.Cmd) {
+	projectPath, err := m.captureProjectPath(m.pendingProject, m.pendingCapture)
+	if err != nil {
+		m.errText = err.Error()
+		return m, nil
+	}
+	envPath := filepath.Join(projectPath, ".env")
+	raw, err := os.ReadFile(envPath)
+	if err != nil {
+		m.errText = safeError(fmt.Errorf("read project .env: %w", err))
+		return m, nil
+	}
+	base, available, err := captureBaseline(m.cfg, m.pendingProject, m.pendingProfile)
+	if err != nil {
+		m.errText = safeError(err)
+		return m, nil
+	}
+	return m.openEditorContent(m.pendingProject, envPath, raw, base, m.pendingProfile, available, screenConfirmCapture)
+}
+
+func (m model) openEditorContent(project, path string, raw, base []byte, baseProfile string, baseAvailable bool, back screen) (tea.Model, tea.Cmd) {
 	if err := inlineEditableEnv(raw); err != nil {
 		m.errText = err.Error()
 		return m, nil
@@ -71,19 +100,14 @@ func (m model) openEditor(project string, back screen) (tea.Model, tea.Cmd) {
 
 	m.editor = editor
 	m.editorProject = project
+	m.editorPath = path
 	m.editorRaw = raw
+	m.editorBase = base
+	m.editorBaseProfile = baseProfile
+	m.editorBaseAvailable = baseAvailable
 	m.editorCRLF = crlf
 	m.editorTrailingNewline = trailing
 	m.editorReturn = back
-	if base, profile, ok, baseErr := app.ReadActiveProfileEnv(*m.cfg, project); baseErr == nil {
-		m.editorBase = base
-		m.editorBaseProfile = profile
-		m.editorBaseAvailable = ok
-	} else {
-		m.editorBase = nil
-		m.editorBaseProfile = profile
-		m.editorBaseAvailable = false
-	}
 	m.screen = screenEditor
 	m = m.applyEditorSize()
 	return m, textarea.Blink
@@ -138,11 +162,24 @@ func (m model) saveEditor() (tea.Model, tea.Cmd) {
 	}
 	data := m.editorBytes()
 	project := m.editorProject
-	if err := app.WriteLocalEnv(*m.cfg, project, data); err != nil {
+	var err error
+	if m.editorPath != "" {
+		err = vault.WriteAtomic(m.editorPath, data, 0o600)
+	} else {
+		err = app.WriteLocalEnv(*m.cfg, project, data)
+	}
+	if err != nil {
 		m.errText = safeError(err)
 		return m, nil
 	}
 	back := m.editorReturn
+	if back == screenConfirmCapture {
+		profile, intent := m.pendingProfile, m.pendingCapture
+		m.clearEditor()
+		m.screen = back
+		m.info = ".env saved — preview refreshed"
+		return m.requestCapturePreview(project, profile, intent)
+	}
 	m.clearEditor()
 	m.screen = back
 	m.info = ".env saved"
@@ -170,6 +207,7 @@ func (m model) closeEditor(info string) (tea.Model, tea.Cmd) {
 func (m *model) clearEditor() {
 	m.editor = textarea.Model{}
 	m.editorProject = ""
+	m.editorPath = ""
 	m.editorRaw = nil
 	m.editorBase = nil
 	m.editorBaseProfile = ""

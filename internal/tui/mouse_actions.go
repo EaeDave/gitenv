@@ -136,6 +136,8 @@ func (m model) handleMouseButton(action mouseAction) (tea.Model, tea.Cmd) {
 		return m.requestContextualSync()
 	case mouseActionReviewChanges:
 		return m.handleKey(tea.KeyPressMsg{Code: 'v', Text: "v"})
+	case mouseActionEditCapture:
+		return m.openCaptureEditor()
 	case mouseActionConfirm:
 		return m.handleKey(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	case mouseActionCancel:

@@ -30,12 +30,13 @@ func (m model) renderCapturePreview(width int) string {
 	}
 	rows = append(rows,
 		"",
-		styles.muted.Render("Values are hidden. Capture preserves the file byte for byte."),
+		styles.muted.Render("Values are hidden here. Press e to inspect or edit the local .env."),
+		styles.muted.Render("Capture preserves the file byte for byte."),
 		"",
 		m.renderMouseButtons(m.confirmationMouseButtons()),
 	)
 	panel := renderPanel("Capture local .env changes?", strings.Join(rows, "\n"), min(width, 76), true)
-	return lipgloss.JoinVertical(lipgloss.Left, panel, "", renderHelp("enter/y", "capture", "n/esc", "cancel"))
+	return lipgloss.JoinVertical(lipgloss.Left, panel, "", renderHelp("enter/y", "capture", "e", "inspect/edit", "n/esc", "cancel"))
 }
 
 func renderCaptureChange(change envdiff.Change) string {

@@ -787,6 +787,19 @@ func TestCapturePreviewHidesValuesAndWritesOnlyAfterConfirmation(t *testing.T) {
 			t.Fatalf("capture preview exposed secret %q:\n%s", secret, view)
 		}
 	}
+	if !strings.Contains(ansi.Strip(view), "e inspect/edit") {
+		t.Fatalf("capture preview does not advertise value inspection:\n%s", view)
+	}
+	editing, _ := m.confirmCaptureKey(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	m = editing.(model)
+	if m.screen != screenEditor || !strings.Contains(m.View().Content, "new-secret") || !strings.Contains(m.View().Content, "Diff vs dev") {
+		t.Fatalf("capture editor did not reveal the local value and captured baseline:\n%s", m.View().Content)
+	}
+	returned, _ := m.editorKey(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = returned.(model)
+	if m.screen != screenConfirmCapture || m.pendingProject != "api" || m.pendingProfile != "dev" {
+		t.Fatalf("editor did not return to capture confirmation: %#v", m)
+	}
 	cancelled, cancelCmd := m.confirmCaptureKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	if cancelCmd != nil || cancelled.(model).screen != screenProfiles {
 		t.Fatalf("capture cancellation failed: %#v", cancelled)

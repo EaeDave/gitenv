@@ -172,7 +172,7 @@ type model struct {
 	editor                                                 textarea.Model
 	editorRaw                                              []byte
 	editorBase                                             []byte
-	editorProject, editorBaseProfile                       string
+	editorProject, editorPath, editorBaseProfile           string
 	editorCRLF, editorTrailingNewline, editorBaseAvailable bool
 	editorReturn                                           screen
 	version                                                string

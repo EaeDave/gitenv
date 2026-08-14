@@ -67,24 +67,32 @@ func capturePreviewCmd(cfg *vault.LocalConfig, projectPath, project, profile str
 }
 
 func capturePreviewBase(cfg *vault.LocalConfig, project, profile string) ([]byte, error) {
+	base, _, err := captureBaseline(cfg, project, profile)
+	return base, err
+}
+
+func captureBaseline(cfg *vault.LocalConfig, project, profile string) ([]byte, bool, error) {
 	manifest, err := vault.LoadManifest(cfg.VaultPath)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	projectEntry, exists := manifest.Projects[project]
 	if !exists {
-		return nil, nil
+		return nil, false, nil
 	}
 	if _, exists := projectEntry.Profiles[profile]; !exists {
-		return nil, nil
+		return nil, false, nil
 	}
-	return vault.ReadProfile(cfg, project, profile)
+	base, err := vault.ReadProfile(cfg, project, profile)
+	return base, err == nil, err
 }
 
 func (m model) confirmCaptureKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "n", "N", "esc", "q":
 		return m.cancelCapturePreview()
+	case "e", "E":
+		return m.openCaptureEditor()
 	case "enter", "y", "Y":
 		// Capture is the primary action on this preview. Enter confirms the
 		// highlighted default just like it does on every menu and form.
