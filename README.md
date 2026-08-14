@@ -95,6 +95,7 @@ Projects screen:
 ```text
 ↑↓/jk   move through the scrollable project list
 /       fuzzy-search projects by name, path, or repository
+tab     cycle all / modified / missing project filters
 enter   open the project, adopt it, or add the current folder when prompted
 a       add the current folder as a project
 c       capture the .env into a profile
@@ -147,7 +148,9 @@ keyboard. Some terminals require holding `shift` while selecting terminal text
 when mouse tracking is active.
 
 Capture preview: `enter` or `y` confirms; `n` or `esc` cancels.
-Inline editor: `ctrl+s` save, `esc` cancel, `enter` new line.
+Inline editor: click to move the cursor, use the wheel to scroll, `ctrl+s`
+save, `esc` cancel, and `enter` new line. Hold `shift` while dragging to
+select terminal text.
 Everywhere: `ctrl+c` quits, `U` installs an offered update.
 
 ## CLI

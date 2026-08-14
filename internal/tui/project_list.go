@@ -11,9 +11,18 @@ import (
 	"github.com/eaedave/gitenv/internal/app"
 )
 
+type projectFilter int
+
+const (
+	projectFilterAll projectFilter = iota
+	projectFilterModified
+	projectFilterMissing
+)
+
 type projectListItem struct {
 	state   app.ProjectState
-	current bool
+	current bool // current folder is not added yet
+	focused bool // current folder is linked to this project
 }
 
 func (item projectListItem) FilterValue() string {
@@ -44,27 +53,49 @@ func (delegate projectListDelegate) Render(writer io.Writer, model list.Model, i
 		marker = styles.hovered.Render("• ")
 	}
 
-	name := item.state.Name
-	if selected && hovered {
-		name = styles.selected.Underline(true).Render(name)
-	} else if selected {
-		name = styles.selected.Render(name)
-	} else if hovered {
-		name = styles.hovered.Render(name)
-	} else {
-		name = styles.value.Render(name)
+	nameStyle := styles.value
+	if selected {
+		nameStyle = styles.selected
+	}
+	if hovered {
+		nameStyle = nameStyle.Underline(true)
 	}
 
 	badge := projectListBadge(item)
-	summary := renderProjectListSummary(item)
-	prefix := marker + badge + " " + name
 	rowWidth := max(8, model.Width()-6)
-	available := max(0, rowWidth-lipglossWidth(prefix)-2)
-	if summary != "" && available >= 6 {
-		summary = ansi.Truncate(summary, available, "…")
-		prefix += "  " + summary
+	fixed := marker + badge + " "
+	summary := renderProjectListSummary(item)
+	status := renderProjectListStatus(item)
+	minimumNameWidth := 8
+	if rowWidth-lipglossWidth(fixed)-lipglossWidth(summary)-2 < minimumNameWidth {
+		// The profile is useful context, but status is the decision-making
+		// signal. Drop profile context before ever truncating the status.
+		summary = status
 	}
-	_, _ = io.WriteString(writer, ansi.Truncate(prefix, rowWidth, "…"))
+	nameText := item.state.Name
+	if item.focused {
+		nameText = "⌂ " + nameText
+	}
+	nameWidth := rowWidth - lipglossWidth(fixed) - lipglossWidth(summary) - 2
+	minimumUsefulName := min(14, lipglossWidth(nameText))
+	if nameWidth < minimumUsefulName {
+		// On genuinely narrow layouts the project name wins. The semantic dot
+		// remains visible and the full status is available in Details.
+		summary = ""
+		nameWidth = rowWidth - lipglossWidth(fixed)
+	}
+	name := ansi.Truncate(nameStyle.Render(nameText), max(1, nameWidth), "…")
+	row := fixed + name
+	if summary != "" {
+		row += strings.Repeat(" ", max(2, rowWidth-lipglossWidth(row)-lipglossWidth(summary))) + summary
+	}
+	row += strings.Repeat(" ", max(0, rowWidth-lipglossWidth(row)))
+	if selected {
+		row = styles.selectedRow.Render(row)
+	} else if hovered {
+		row = styles.hoveredRow.Render(row)
+	}
+	_, _ = io.WriteString(writer, row)
 }
 
 func renderProjectListSummary(item projectListItem) string {
@@ -76,21 +107,28 @@ func renderProjectListSummary(item projectListItem) string {
 	if state.ActiveProfile != "" {
 		parts = append(parts, styles.muted.Render(state.ActiveProfile))
 	}
+	parts = append(parts, renderProjectListStatus(item))
+	return strings.Join(parts, styles.muted.Render(" · "))
+}
+
+func renderProjectListStatus(item projectListItem) string {
+	if item.current {
+		return styles.warning.Render("not added")
+	}
+	state := item.state
 	label := projectStateLabel(state)
 	switch {
 	case state.Kind != app.ProjectLinked:
-		label = styles.muted.Render(label)
+		return styles.muted.Render(label)
 	case state.Status == "clean" || state.Status == "synced":
-		label = styles.success.Render(label)
+		return styles.success.Render(label)
 	case state.Status == "modified" || state.Status == "dirty" || state.Status == "missing" || state.Status == "unmanaged":
-		label = styles.warning.Render(label)
+		return styles.warning.Render(label)
 	case state.Status == "error":
-		label = styles.danger.Render(label)
+		return styles.danger.Render(label)
 	default:
-		label = styles.muted.Render(label)
+		return styles.muted.Render(label)
 	}
-	parts = append(parts, label)
-	return strings.Join(parts, styles.muted.Render(" · "))
 }
 
 func projectListBadge(item projectListItem) string {
@@ -158,19 +196,53 @@ func newProjectList(items []list.Item, width, height int, isDark bool) *list.Mod
 func (m model) projectListItems() []list.Item {
 	items := make([]list.Item, 0, len(m.projectStates)+1)
 	if m.current.HasEnv && m.current.LinkedName == "" && m.current.Path != "" {
-		items = append(items, projectListItem{
+		item := projectListItem{
 			state: app.ProjectState{
 				Name: m.current.Name,
 				Kind: app.ProjectNoRepo,
 				Path: m.current.Path,
 			},
 			current: true,
-		})
+		}
+		if m.projectFilterMatches(item) {
+			items = append(items, item)
+		}
 	}
 	for _, state := range m.projectStates {
-		items = append(items, projectListItem{state: state})
+		item := projectListItem{state: state, focused: state.Name == m.current.LinkedName}
+		if m.projectFilterMatches(item) {
+			items = append(items, item)
+		}
 	}
 	return items
+}
+
+func (m model) projectFilterMatches(item projectListItem) bool {
+	if item.current {
+		return m.projectFilter == projectFilterAll
+	}
+	switch m.projectFilter {
+	case projectFilterModified:
+		return item.state.Kind == app.ProjectLinked && (item.state.Status == "modified" || item.state.Status == "dirty")
+	case projectFilterMissing:
+		return item.state.Kind == app.ProjectMissing
+	default:
+		return true
+	}
+}
+
+func (m *model) setProjectFilter(filter projectFilter) {
+	if m.projectFilter == filter {
+		return
+	}
+	m.projectFilter = filter
+	m.refreshProjectList()
+}
+
+func (m *model) cycleProjectFilter(direction int) {
+	count := int(projectFilterMissing) + 1
+	next := (int(m.projectFilter) + direction + count) % count
+	m.setProjectFilter(projectFilter(next))
 }
 
 func (m *model) refreshProjectList() {
@@ -216,6 +288,11 @@ func (m model) projectListWidth() int {
 func (m model) projectListHeight() int {
 	if m.height <= 0 {
 		return 10
+	}
+	if availableWidth(m.width) >= dashboardViewWidth && m.height >= 28 {
+		// Sync and overview live in the right column on a roomy terminal, so the
+		// project list can use the full workspace height.
+		return max(5, m.height-11)
 	}
 	return max(5, m.height-18)
 }

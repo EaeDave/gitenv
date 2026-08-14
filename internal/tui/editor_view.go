@@ -1,17 +1,35 @@
 package tui
 
 import (
+	"fmt"
+
 	"charm.land/lipgloss/v2"
 
 	"github.com/eaedave/gitenv/internal/envdiff"
 )
 
 func (m model) renderEditor(width int) string {
-	title := styles.brand.Render("Edit .env") + "  " + styles.value.Render(m.editorProject)
+	title := styles.brand.Render("Edit .env") + "  " + styles.value.Render(m.editorProject) + "  " +
+		styles.warning.Render("● values visible")
+	position := fmt.Sprintf("Line %d/%d · Col %d", m.editor.Line()+1, max(1, m.editor.LineCount()), m.editor.Column()+1)
+	panelTitle := "Local .env  ·  " + position
+	editorPanel := renderPanel(panelTitle, m.renderEditorViewport(), width, true)
 	summary := m.renderEditorDiff()
-	help := renderHelp("ctrl+s", "save", "esc", "cancel", "↑↓/←→", "move", "enter", "new line")
-	sections := []string{title, "", m.editor.View(), "", summary, "", help}
-	_ = width
+	help := lipgloss.JoinVertical(lipgloss.Left,
+		renderHelp("ctrl+s", "save", "esc", "cancel", "click", "move cursor", "wheel", "scroll", "enter", "new line"),
+		renderHelp("shift+drag", "select terminal text"),
+	)
+	sections := []string{
+		title,
+		"",
+		editorPanel,
+		"",
+		summary,
+		"",
+		m.renderMouseButtons(editorMouseButtons()),
+		"",
+		help,
+	}
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 

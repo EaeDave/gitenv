@@ -29,6 +29,15 @@ func (m model) handleMouseInteraction(msg mouseInteractionMsg) (tea.Model, tea.C
 }
 
 func (m model) handleMouseWheel(msg mouseInteractionMsg) (tea.Model, tea.Cmd) {
+	if m.screen == screenEditor && (msg.target.kind == mouseTargetEditorViewport || msg.target.kind == mouseTargetEditorRow) {
+		switch msg.button {
+		case tea.MouseWheelUp:
+			m.scrollEditor(-3)
+		case tea.MouseWheelDown:
+			m.scrollEditor(3)
+		}
+		return m, nil
+	}
 	if m.screen == screenProjects && m.projectList != nil &&
 		(msg.target.kind == mouseTargetProjectList || msg.target.kind == mouseTargetProjectRow) {
 		for range 3 {
@@ -92,6 +101,9 @@ func (m model) handleMouseClick(msg mouseInteractionMsg) (tea.Model, tea.Cmd) {
 			m.fieldCursor = msg.target.index
 		}
 		return m, nil
+	case mouseTargetEditorRow:
+		m.moveEditorCursor(msg.target.index, msg.x-msg.target.contentLeft)
+		return m, nil
 	default:
 		return m, nil
 	}
@@ -138,6 +150,19 @@ func (m model) handleMouseButton(action mouseAction) (tea.Model, tea.Cmd) {
 		return m.handleKey(tea.KeyPressMsg{Code: 'v', Text: "v"})
 	case mouseActionEditCapture:
 		return m.openCaptureEditor()
+	case mouseActionFilterAll:
+		m.setProjectFilter(projectFilterAll)
+		return m, nil
+	case mouseActionFilterModified:
+		m.setProjectFilter(projectFilterModified)
+		return m, nil
+	case mouseActionFilterMissing:
+		m.setProjectFilter(projectFilterMissing)
+		return m, nil
+	case mouseActionSaveEditor:
+		return m.editorKey(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	case mouseActionCancelEditor:
+		return m.editorKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	case mouseActionConfirm:
 		return m.handleKey(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	case mouseActionCancel:

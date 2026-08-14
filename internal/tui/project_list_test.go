@@ -94,6 +94,69 @@ func TestProjectListColorsStatusByMeaning(t *testing.T) {
 	}
 }
 
+func TestWideProjectDashboardUsesRightColumnForOverviewAndSync(t *testing.T) {
+	cfg := vault.LocalConfig{VaultPath: "/vault", Projects: map[string]vault.LocalProject{}}
+	states := []app.ProjectState{
+		{Name: "clean", Kind: app.ProjectLinked, Status: "clean"},
+		{Name: "changed", Kind: app.ProjectLinked, Status: "modified"},
+		{Name: "remote-only", Kind: app.ProjectMissing},
+	}
+	m := model{cfg: &cfg, screen: screenProjects, width: 120, height: 40, recoveryExported: true, projectStates: states, projects: projectNames(states)}
+	m.refreshProjectList()
+	view := ansi.Strip(m.View().Content)
+	lines := strings.Split(view, "\n")
+	positions := map[string][2]int{}
+	for y, line := range lines {
+		for _, title := range []string{"Details", "Overview", "Sync"} {
+			if x := strings.Index(line, title); x >= 0 {
+				positions[title] = [2]int{x, y}
+			}
+		}
+	}
+	if positions["Overview"][0] <= 0 || positions["Details"][1] >= positions["Overview"][1] || positions["Overview"][1] >= positions["Sync"][1] {
+		t.Fatalf("right dashboard panels are not stacked: %#v\n%s", positions, view)
+	}
+	for _, expected := range []string{"1 modified", "1 no local copy", "1 up to date", "[ All ]", "[ Modified ]", "[ Missing ]"} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("overview missing %q:\n%s", expected, view)
+		}
+	}
+	if renderedHeight := lipgloss.Height(m.View().Content); renderedHeight > m.height {
+		t.Fatalf("dashboard is %d lines in a %d-line terminal", renderedHeight, m.height)
+	}
+}
+
+func TestProjectFiltersCycleWithoutLosingKeyboardNavigation(t *testing.T) {
+	cfg := vault.LocalConfig{VaultPath: "/vault", Projects: map[string]vault.LocalProject{}}
+	states := []app.ProjectState{
+		{Name: "clean", Kind: app.ProjectLinked, Status: "clean"},
+		{Name: "changed", Kind: app.ProjectLinked, Status: "modified"},
+		{Name: "remote-only", Kind: app.ProjectMissing},
+	}
+	m := model{cfg: &cfg, screen: screenProjects, width: 120, height: 32, projectStates: states, projects: projectNames(states)}
+	m.refreshProjectList()
+
+	next, _ := m.projectsKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = next.(model)
+	if m.projectFilter != projectFilterModified || len(m.projectList.VisibleItems()) != 1 {
+		t.Fatalf("tab did not select modified filter: filter=%v items=%d", m.projectFilter, len(m.projectList.VisibleItems()))
+	}
+	if title := projectListTitle(m.projectFilter, 1, 3); title != "Projects · 1/3 · modified" {
+		t.Fatalf("filtered title = %q", title)
+	}
+
+	next, _ = m.projectsKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = next.(model)
+	if item := m.projectList.SelectedItem().(projectListItem); m.projectFilter != projectFilterMissing || item.state.Name != "remote-only" {
+		t.Fatalf("second tab did not select missing projects: filter=%v item=%q", m.projectFilter, item.state.Name)
+	}
+	next, _ = m.projectsKey(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	m = next.(model)
+	if m.projectFilter != projectFilterModified {
+		t.Fatalf("shift+tab filter = %v, want modified", m.projectFilter)
+	}
+}
+
 func TestProjectListSupportsFuzzySearchAndHidesLongPaths(t *testing.T) {
 	cfg := vault.LocalConfig{VaultPath: "/vault", Projects: map[string]vault.LocalProject{}}
 	longPath := "/home/example/Projects/company/platform/services/promex-tt-mill"
@@ -116,7 +179,10 @@ func TestProjectListSupportsFuzzySearchAndHidesLongPaths(t *testing.T) {
 	if strings.Contains(listView, longPath) {
 		t.Fatalf("full path leaked into compact project row:\n%s", listView)
 	}
-	if !strings.Contains(listView, "prod · mo") {
-		t.Fatalf("compact row lost profile/status context:\n%s", listView)
+	if !strings.Contains(listView, "prod · modified") {
+		t.Fatalf("wide row truncated decision-making status:\n%s", listView)
+	}
+	if !strings.Contains(m.renderProjectList(), "\x1b[48;2;") {
+		t.Fatalf("selected row has no background emphasis:\n%s", m.renderProjectList())
 	}
 }

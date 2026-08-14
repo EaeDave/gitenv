@@ -12,12 +12,13 @@ import (
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/eaedave/gitenv/internal/app"
 	"github.com/eaedave/gitenv/internal/vault"
 )
 
-const editorChromeHeight = 11
+const editorChromeHeight = 18
 
 // inlineEditableEnv rejects .env content the built-in editor cannot round-trip
 // byte-for-byte. The textarea sanitizer replaces tabs, drops control characters
@@ -108,8 +109,11 @@ func (m model) openEditorContent(project, path string, raw, base []byte, basePro
 	m.editorCRLF = crlf
 	m.editorTrailingNewline = trailing
 	m.editorReturn = back
+	m.editorTopLine = 0
+	m.editorHorizontalOffset = 0
 	m.screen = screenEditor
 	m = m.applyEditorSize()
+	m = m.ensureEditorCursorVisible()
 	return m, textarea.Blink
 }
 
@@ -117,9 +121,9 @@ func (m model) applyEditorSize() model {
 	if m.screen != screenEditor {
 		return m
 	}
-	m.editor.SetWidth(max(20, m.width-4))
-	m.editor.SetHeight(max(3, m.height-editorChromeHeight))
-	return m
+	m.editor.SetWidth(max(20, availableWidth(m.width)-4))
+	m.editor.SetHeight(m.editorViewportHeight())
+	return m.ensureEditorCursorVisible()
 }
 
 // editorBytes reconstructs the on-disk representation from the buffer,
@@ -140,6 +144,74 @@ func (m model) editorDirty() bool {
 	return !bytes.Equal(m.editorBytes(), m.editorRaw)
 }
 
+func (m model) ensureEditorCursorVisible() model {
+	height := m.editorViewportHeight()
+	line := m.editor.Line()
+	if line < m.editorTopLine {
+		m.editorTopLine = line
+	} else if line >= m.editorTopLine+height {
+		m.editorTopLine = line - height + 1
+	}
+
+	lines := strings.Split(m.editor.Value(), "\n")
+	if line < 0 || line >= len(lines) {
+		return m
+	}
+	runes := []rune(lines[line])
+	column := min(max(0, m.editor.Column()), len(runes))
+	if column < m.editorHorizontalOffset {
+		m.editorHorizontalOffset = column
+	}
+	contentWidth := max(2, m.editorContentWidth()-1)
+	for m.editorHorizontalOffset < column && runeSliceWidth(runes[m.editorHorizontalOffset:column]) >= contentWidth {
+		m.editorHorizontalOffset++
+	}
+	if column < contentWidth {
+		m.editorHorizontalOffset = 0
+	}
+	return m
+}
+
+func runeSliceWidth(runes []rune) int {
+	width := 0
+	for _, character := range runes {
+		width += max(1, ansi.StringWidth(string(character)))
+	}
+	return width
+}
+
+func (m *model) moveEditorCursor(line, visualColumn int) {
+	line = min(max(0, line), max(0, m.editor.LineCount()-1))
+	for m.editor.Line() < line {
+		m.editor.CursorDown()
+	}
+	for m.editor.Line() > line {
+		m.editor.CursorUp()
+	}
+	lines := strings.Split(m.editor.Value(), "\n")
+	if line >= len(lines) {
+		return
+	}
+	runes := []rune(lines[line])
+	column := m.editorHorizontalOffset
+	used := 0
+	for column < len(runes) {
+		characterWidth := max(1, ansi.StringWidth(string(runes[column])))
+		if used+characterWidth > max(0, visualColumn) {
+			break
+		}
+		used += characterWidth
+		column++
+	}
+	m.editor.SetCursorColumn(column)
+	*m = m.ensureEditorCursorVisible()
+}
+
+func (m *model) scrollEditor(lines int) {
+	maximum := max(0, m.editor.LineCount()-m.editorViewportHeight())
+	m.editorTopLine = min(maximum, max(0, m.editorTopLine+lines))
+}
+
 func (m model) editorKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "ctrl+s":
@@ -153,6 +225,7 @@ func (m model) editorKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	m.editor, cmd = m.editor.Update(key)
+	m = m.ensureEditorCursorVisible()
 	return m, cmd
 }
 
@@ -214,5 +287,7 @@ func (m *model) clearEditor() {
 	m.editorBaseAvailable = false
 	m.editorCRLF = false
 	m.editorTrailingNewline = false
+	m.editorTopLine = 0
+	m.editorHorizontalOffset = 0
 	m.editorReturn = screenProjects
 }

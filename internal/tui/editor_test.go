@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,8 @@ import (
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/eaedave/gitenv/internal/vault"
 )
@@ -38,6 +41,69 @@ func editorWithBase(base, buffer string, trailing bool) model {
 		editorBaseProfile:     "prod",
 		editorBaseAvailable:   true,
 	}
+}
+
+func TestEditorSeparatesKeysValuesCommentsAndShowsExposureState(t *testing.T) {
+	m, _ := openEditorModel(t, []byte("ACTIVE=one\nSECOND=two\n# disabled setting\n"))
+	m.editor.MoveToBegin()
+	m = m.ensureEditorCursorVisible()
+	view := m.renderEditor(80)
+	for _, styled := range []string{
+		styles.key.Render("SECOND"),
+		styles.muted.Render("="),
+		styles.value.Render("two"),
+		styles.muted.Render("# disabled setting"),
+		styles.warning.Render("● values visible"),
+	} {
+		if !strings.Contains(view, styled) {
+			t.Fatalf("editor missing semantic styling %q:\n%s", styled, view)
+		}
+	}
+	if !strings.Contains(ansi.Strip(view), "Line 1/3 · Col 1") {
+		t.Fatalf("editor missing cursor position:\n%s", ansi.Strip(view))
+	}
+	if renderedHeight := lipgloss.Height(m.View().Content); renderedHeight > m.height {
+		t.Fatalf("editor is %d lines in a %d-line terminal", renderedHeight, m.height)
+	}
+}
+
+func TestEditorMouseClickMovesCursorAndWheelScrolls(t *testing.T) {
+	lines := make([]string, 20)
+	for index := range lines {
+		lines[index] = fmt.Sprintf("KEY_%02d=value", index)
+	}
+	m, _ := openEditorModel(t, []byte(strings.Join(lines, "\n")+"\n"))
+	m.editor.MoveToBegin()
+	m = m.ensureEditorCursorVisible()
+	content := m.View().Content
+	row := editorRowRegionForIndex(t, m, content, 1)
+	m = dispatchViewMouse(t, m, tea.MouseClickMsg{X: row.target.contentLeft + 7, Y: row.bounds.y, Button: tea.MouseLeft})
+	if m.editor.Line() != 1 || m.editor.Column() != 7 {
+		t.Fatalf("mouse cursor = line %d col %d, want line 1 col 7", m.editor.Line(), m.editor.Column())
+	}
+	next, _ := m.editorKey(tea.KeyPressMsg{Code: 'X', Text: "X"})
+	m = next.(model)
+	if line := strings.Split(m.editor.Value(), "\n")[1]; line != "KEY_01=Xvalue" {
+		t.Fatalf("typing after click edited %q", line)
+	}
+
+	content = m.View().Content
+	row = editorRowRegionForIndex(t, m, content, 1)
+	m = dispatchViewMouse(t, m, tea.MouseWheelMsg{X: row.bounds.x, Y: row.bounds.y, Button: tea.MouseWheelDown})
+	if m.editorTopLine != 3 {
+		t.Fatalf("wheel top line = %d, want 3", m.editorTopLine)
+	}
+}
+
+func editorRowRegionForIndex(t *testing.T, m model, content string, line int) mouseRegion {
+	t.Helper()
+	for _, region := range m.mouseRegions(content) {
+		if region.target.kind == mouseTargetEditorRow && region.target.index == line {
+			return region
+		}
+	}
+	t.Fatalf("editor row %d not rendered", line)
+	return mouseRegion{}
 }
 
 func TestEditorRendersGitStyleDiffAgainstCapturedProfile(t *testing.T) {

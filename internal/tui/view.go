@@ -10,6 +10,8 @@ import (
 	"charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/eaedave/gitenv/internal/app"
 	gitops "github.com/eaedave/gitenv/internal/git"
 )
 
@@ -312,17 +314,29 @@ func (m model) renderUnlockMenu(width int) string {
 func (m model) renderProjects(width int) string {
 	listWidth := projectListPanelWidth(width)
 	projectList := m.projectListView(listWidth-4, m.projectListHeight())
-	count := len(m.projectStates)
+	total := len(m.projectStates)
 	if m.current.HasEnv && m.current.LinkedName == "" {
-		count++
+		total++
 	}
-	listTitle := fmt.Sprintf("Projects · %d", count)
-	details := m.renderProjectContext(width - listWidth - 2)
+	visible := 0
+	if m.projectList != nil {
+		visible = len(m.projectList.VisibleItems())
+	}
+	listTitle := projectListTitle(m.projectFilter, visible, total)
+	rightWidth := width - listWidth - 2
+	details := m.renderProjectContext(rightWidth)
 	var workspace string
 	if width >= compactViewWidth {
 		listPanel := renderPanel(listTitle, projectList, listWidth, true)
-		detailPanel := renderPanel("Details", details, width-listWidth-2, false)
-		workspace = lipgloss.JoinHorizontal(lipgloss.Top, listPanel, "  ", detailPanel)
+		rightPanels := []string{renderPanel("Details", details, rightWidth, false)}
+		if width >= dashboardViewWidth && (m.height <= 0 || m.height >= 28) {
+			rightPanels = append(rightPanels,
+				renderPanel("Overview", m.renderProjectOverview(), rightWidth, false),
+				renderPanel("Sync", m.renderProjectSyncStatus(rightWidth), rightWidth, false),
+			)
+		}
+		rightColumn := lipgloss.JoinVertical(lipgloss.Left, joinWithBlankLines(rightPanels...)...)
+		workspace = lipgloss.JoinHorizontal(lipgloss.Top, listPanel, "  ", rightColumn)
 	} else {
 		// On narrow terminals the selected row is the overview; Enter opens the
 		// project's profile details. Stacking another panel made the primary list
@@ -333,8 +347,33 @@ func (m model) renderProjects(width int) string {
 	if m.height > 0 && m.height < 28 {
 		return lipgloss.JoinVertical(lipgloss.Left, workspace, "", m.renderProjectSyncSummary(), "", help)
 	}
-	syncPanel := renderPanel("Sync", m.renderProjectSyncStatus(), width, false)
+	if width >= dashboardViewWidth {
+		return lipgloss.JoinVertical(lipgloss.Left, workspace, "", help)
+	}
+	syncPanel := renderPanel("Sync", m.renderProjectSyncStatus(width), width, false)
 	return lipgloss.JoinVertical(lipgloss.Left, workspace, "", syncPanel, "", help)
+}
+
+func joinWithBlankLines(parts ...string) []string {
+	joined := make([]string, 0, len(parts)*2-1)
+	for index, part := range parts {
+		if index > 0 {
+			joined = append(joined, "")
+		}
+		joined = append(joined, part)
+	}
+	return joined
+}
+
+func projectListTitle(filter projectFilter, visible, total int) string {
+	if filter == projectFilterAll {
+		return fmt.Sprintf("Projects · %d", total)
+	}
+	label := "modified"
+	if filter == projectFilterMissing {
+		label = "missing"
+	}
+	return fmt.Sprintf("Projects · %d/%d · %s", visible, total, label)
 }
 
 func (m model) renderProjectsHelp(width int) string {
@@ -372,8 +411,14 @@ func (m model) renderProjectContext(width int) string {
 		} else if state.Identity != "" {
 			lines = append(lines, labelValue("Repository", ansi.Truncate(state.Identity, valueWidth, "…")))
 		}
+		if state.Status == "modified" || state.Status == "dirty" {
+			lines = append(lines, "",
+				styles.warning.Render("● Local .env has uncaptured changes"),
+				styles.muted.Render("Capture reviews changed keys before saving."),
+			)
+		}
 		if state.Name == m.current.LinkedName {
-			lines = append(lines, "", styles.success.Render("● current folder"))
+			lines = append(lines, "", styles.success.Render("⌂ current folder"))
 		}
 		lines = append(lines, "", m.renderMouseButtons(m.projectMouseButtons()))
 		return strings.Join(lines, "\n")
@@ -411,14 +456,65 @@ func compactPath(path string, width int) string {
 	return parent + "…/" + base
 }
 
+type projectOverview struct {
+	modified, missing, clean, attention, checking int
+}
+
+func (m model) projectOverviewCounts() projectOverview {
+	var counts projectOverview
+	for _, state := range m.projectStates {
+		switch {
+		case state.Kind == app.ProjectMissing:
+			counts.missing++
+		case state.Kind != app.ProjectLinked:
+			// Found clones and repository-less projects are discoverability states,
+			// not local environment health states.
+		case state.Status == "clean" || state.Status == "synced":
+			counts.clean++
+		case state.Status == "modified" || state.Status == "dirty":
+			counts.modified++
+		case state.Status == "" || state.Status == "checking":
+			counts.checking++
+		default:
+			counts.attention++
+		}
+	}
+	return counts
+}
+
+func (m model) renderProjectOverview() string {
+	counts := m.projectOverviewCounts()
+	modified := styles.muted.Render(fmt.Sprintf("○ %d modified", counts.modified))
+	if counts.modified > 0 {
+		modified = styles.warning.Render(fmt.Sprintf("● %d modified", counts.modified))
+	}
+	clean := styles.muted.Render(fmt.Sprintf("○ %d up to date", counts.clean))
+	if counts.clean > 0 {
+		clean = styles.success.Render(fmt.Sprintf("● %d up to date", counts.clean))
+	}
+	rows := []string{
+		modified + styles.muted.Render("  ·  ") + clean,
+		styles.muted.Render(fmt.Sprintf("○ %d no local copy", counts.missing)),
+	}
+	if counts.attention > 0 {
+		rows = append(rows, styles.warning.Render(fmt.Sprintf("● %d need attention", counts.attention)))
+	}
+	if counts.checking > 0 {
+		rows = append(rows, styles.muted.Render(fmt.Sprintf("○ %d checking", counts.checking)))
+	}
+	rows = append(rows, "", m.renderMouseButtons(m.projectFilterMouseButtons()), styles.muted.Render("tab / shift+tab cycles filters"))
+	return strings.Join(rows, "\n")
+}
+
 func (m model) renderProjectSyncSummary() string {
 	status, _ := syncStatusText(m.syncStatus)
 	return styles.label.Render("Sync  ") + status
 }
 
-func (m model) renderProjectSyncStatus() string {
+func (m model) renderProjectSyncStatus(width int) string {
 	status, recommendation := syncStatusText(m.syncStatus)
-	remote := ansi.Truncate(valueOrNone(m.remoteDisplayURL), max(18, availableWidth(m.width)/2), "…")
+	remoteWidth := max(12, width-lipgloss.Width(status)-9)
+	remote := ansi.Truncate(valueOrNone(m.remoteDisplayURL), remoteWidth, "…")
 	rows := []string{status + styles.muted.Render("  ·  ") + styles.value.Render(remote)}
 	if !m.syncStatus.CheckedAt.IsZero() {
 		rows[0] += styles.muted.Render("  ·  checked " + m.syncStatus.CheckedAt.Local().Format("15:04"))

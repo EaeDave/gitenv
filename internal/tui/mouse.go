@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -19,6 +20,8 @@ const (
 	mouseTargetProfileRow
 	mouseTargetButton
 	mouseTargetField
+	mouseTargetEditorViewport
+	mouseTargetEditorRow
 )
 
 type mouseAction int
@@ -35,15 +38,21 @@ const (
 	mouseActionSync
 	mouseActionReviewChanges
 	mouseActionEditCapture
+	mouseActionFilterAll
+	mouseActionFilterModified
+	mouseActionFilterMissing
+	mouseActionSaveEditor
+	mouseActionCancelEditor
 	mouseActionConfirm
 	mouseActionCancel
 	mouseActionContinue
 )
 
 type mouseTarget struct {
-	kind   mouseTargetKind
-	action mouseAction
-	index  int
+	kind        mouseTargetKind
+	action      mouseAction
+	index       int
+	contentLeft int
 }
 
 type mouseBounds struct {
@@ -72,12 +81,15 @@ type mouseInteractionMsg struct {
 	kind   mouseEventKind
 	target mouseTarget
 	button tea.MouseButton
+	x, y   int
 	at     time.Time
 }
 
 type mouseButton struct {
-	label  string
-	action mouseAction
+	label   string
+	action  mouseAction
+	primary bool
+	active  bool
 }
 
 func (button mouseButton) text() string {
@@ -89,8 +101,14 @@ func (m model) renderMouseButtons(buttons []mouseButton) string {
 	for _, button := range buttons {
 		target := mouseTarget{kind: mouseTargetButton, action: button.action}
 		style := styles.button
+		if button.primary || button.active {
+			style = styles.buttonPrimary
+		}
 		if m.hoveredMouseTarget == target {
 			style = styles.buttonHovered
+			if button.primary || button.active {
+				style = styles.buttonPrimaryHovered
+			}
 		}
 		parts = append(parts, style.Render(button.text()))
 	}
@@ -103,24 +121,24 @@ func (m model) projectMouseButtons() []mouseButton {
 		return nil
 	}
 	if item.current {
-		return []mouseButton{{label: "Add & capture", action: mouseActionOpenProject}}
+		return []mouseButton{{label: "Add & capture", action: mouseActionOpenProject, primary: true}}
 	}
 	if item.state.Kind == app.ProjectLinked {
 		return []mouseButton{
-			{label: "Open", action: mouseActionOpenProject},
+			{label: "Open", action: mouseActionOpenProject, primary: true},
 			{label: "Capture", action: mouseActionCaptureProject},
 			{label: "Options", action: mouseActionProjectOptions},
 		}
 	}
 	return []mouseButton{
-		{label: "Adopt", action: mouseActionOpenProject},
+		{label: "Adopt", action: mouseActionOpenProject, primary: true},
 		{label: "Options", action: mouseActionProjectOptions},
 	}
 }
 
 func profileMouseButtons() []mouseButton {
 	return []mouseButton{
-		{label: "Apply", action: mouseActionApplyProfile},
+		{label: "Apply", action: mouseActionApplyProfile, primary: true},
 		{label: "Edit", action: mouseActionEditProfile},
 		{label: "Capture active", action: mouseActionCaptureProfile},
 		{label: "Options", action: mouseActionProfileOptions},
@@ -136,18 +154,33 @@ func (m model) renderProfileMouseButtons(width int) string {
 }
 
 func syncMouseButtons() []mouseButton {
-	return []mouseButton{{label: "Sync", action: mouseActionSync}, {label: "Changes", action: mouseActionReviewChanges}}
+	return []mouseButton{{label: "Sync", action: mouseActionSync, primary: true}, {label: "Changes", action: mouseActionReviewChanges}}
+}
+
+func (m model) projectFilterMouseButtons() []mouseButton {
+	return []mouseButton{
+		{label: "All", action: mouseActionFilterAll, active: m.projectFilter == projectFilterAll},
+		{label: "Modified", action: mouseActionFilterModified, active: m.projectFilter == projectFilterModified},
+		{label: "Missing", action: mouseActionFilterMissing, active: m.projectFilter == projectFilterMissing},
+	}
+}
+
+func editorMouseButtons() []mouseButton {
+	return []mouseButton{
+		{label: "Save", action: mouseActionSaveEditor, primary: true},
+		{label: "Cancel", action: mouseActionCancelEditor},
+	}
 }
 
 func (m model) confirmationMouseButtons() []mouseButton {
 	if m.screen == screenConfirmCapture {
 		return []mouseButton{
-			{label: "Capture", action: mouseActionConfirm},
+			{label: "Capture", action: mouseActionConfirm, primary: true},
 			{label: "Edit .env", action: mouseActionEditCapture},
 			{label: "Cancel", action: mouseActionCancel},
 		}
 	}
-	return []mouseButton{{label: "Confirm", action: mouseActionConfirm}, {label: "Cancel", action: mouseActionCancel}}
+	return []mouseButton{{label: "Confirm", action: mouseActionConfirm, primary: true}, {label: "Cancel", action: mouseActionCancel}}
 }
 
 func (m model) formMouseButtons() []mouseButton {
@@ -158,7 +191,7 @@ func (m model) formMouseButtons() []mouseButton {
 	case screenRecovery, screenRecoveryPrompt, screenProjectOptions:
 		primary = "Save"
 	}
-	return []mouseButton{{label: primary, action: mouseActionContinue}, {label: "Cancel", action: mouseActionCancel}}
+	return []mouseButton{{label: primary, action: mouseActionContinue, primary: true}, {label: "Cancel", action: mouseActionCancel}}
 }
 
 func (m model) mouseRegions(content string) []mouseRegion {
@@ -167,11 +200,16 @@ func (m model) mouseRegions(content string) []mouseRegion {
 		regions = append(regions, m.projectListMouseRegions(content)...)
 		regions = append(regions, findMouseButtonRegions(content, m.projectMouseButtons())...)
 		regions = append(regions, findMouseButtonRegions(content, syncMouseButtons())...)
+		regions = append(regions, findMouseButtonRegions(content, m.projectFilterMouseButtons())...)
 	}
 	if m.screen == screenProfiles {
 		regions = append(regions, m.profileMouseRegions(content)...)
 		regions = append(regions, findMouseButtonRegions(content, profileMouseButtons())...)
 		regions = append(regions, findMouseButtonRegions(content, syncMouseButtons())...)
+	}
+	if m.screen == screenEditor {
+		regions = append(regions, m.editorMouseRegions(content)...)
+		regions = append(regions, findMouseButtonRegions(content, editorMouseButtons())...)
 	}
 	if isConfirmationScreen(m.screen) {
 		regions = append(regions, findMouseButtonRegions(content, m.confirmationMouseButtons())...)
@@ -209,16 +247,12 @@ func (m model) projectListMouseRegions(content string) []mouseRegion {
 	start, end := m.projectList.Paginator.GetSliceBounds(len(items))
 	searchFrom := panelTop + 1
 	for index := start; index < end; index++ {
-		item, ok := items[index].(projectListItem)
-		if !ok {
-			continue
-		}
 		for y := searchFrom; y < len(lines); y++ {
-			// Restrict matching to the list panel. The selected project name may
-			// also appear in the details panel on the same rendered screen.
+			// Rows are matched in render order inside the list panel. Matching by
+			// project name fails precisely when the layout truncates a long name.
 			line := ansi.Truncate(lines[y], panelWidth, "")
-			isProjectRow := strings.Contains(line, "●") || strings.Contains(line, "○")
-			if !isProjectRow || !strings.Contains(line, item.state.Name) {
+			isProjectRow := strings.ContainsAny(line, "●○◍+")
+			if !isProjectRow {
 				continue
 			}
 			regions = append(regions, mouseRegion{
@@ -257,6 +291,61 @@ func (m model) profileMouseRegions(content string) []mouseRegion {
 		return regions
 	}
 	return nil
+}
+
+func (m model) editorMouseRegions(content string) []mouseRegion {
+	lines := strings.Split(ansi.Strip(content), "\n")
+	titleY := -1
+	for y, line := range lines {
+		if strings.Contains(line, "Local .env") {
+			titleY = y
+			break
+		}
+	}
+	if titleY < 0 {
+		return nil
+	}
+
+	digits := len(fmt.Sprintf("%d", max(1, m.editor.LineCount())))
+	top := m.editorTopLine
+	bottom := min(m.editor.LineCount(), top+m.editorViewportHeight())
+	regions := make([]mouseRegion, 0, bottom-top+1)
+	viewportTop := -1
+	viewportLeft := 0
+	viewportRight := 0
+	for lineIndex := top; lineIndex < bottom; lineIndex++ {
+		prefix := fmt.Sprintf("%*d │ ", digits, lineIndex+1)
+		for y := titleY + 1; y < len(lines); y++ {
+			byteIndex := strings.Index(lines[y], prefix)
+			if byteIndex < 0 {
+				continue
+			}
+			left := ansi.StringWidth(lines[y][:byteIndex])
+			if left > 8 {
+				// A value may itself contain text that resembles a line-number
+				// gutter; only accept the prefix near the panel's left edge.
+				continue
+			}
+			contentLeft := left + ansi.StringWidth(prefix)
+			regions = append(regions, mouseRegion{
+				target: mouseTarget{kind: mouseTargetEditorRow, index: lineIndex, contentLeft: contentLeft},
+				bounds: mouseBounds{x: left, y: y, width: digits + 3 + m.editorContentWidth(), height: 1},
+			})
+			if viewportTop < 0 {
+				viewportTop = y
+				viewportLeft = left
+			}
+			viewportRight = max(viewportRight, left+digits+3+m.editorContentWidth())
+			break
+		}
+	}
+	if viewportTop >= 0 {
+		regions = append([]mouseRegion{{
+			target: mouseTarget{kind: mouseTargetEditorViewport},
+			bounds: mouseBounds{x: viewportLeft, y: viewportTop, width: viewportRight - viewportLeft, height: m.editorViewportHeight()},
+		}}, regions...)
+	}
+	return regions
 }
 
 func findMouseButtonRegions(content string, buttons []mouseButton) []mouseRegion {
@@ -311,7 +400,7 @@ func mouseHandler(regions []mouseRegion, hovered mouseTarget) func(tea.MouseMsg)
 	return func(msg tea.MouseMsg) tea.Cmd {
 		mouse := msg.Mouse()
 		target := mouseTargetAt(regions, mouse.X, mouse.Y)
-		event := mouseInteractionMsg{target: target, button: mouse.Button, at: time.Now()}
+		event := mouseInteractionMsg{target: target, button: mouse.Button, x: mouse.X, y: mouse.Y, at: time.Now()}
 		switch msg.(type) {
 		case tea.MouseMotionMsg:
 			if target == hovered {

@@ -7,37 +7,45 @@ import (
 )
 
 const (
-	defaultViewWidth = 80
-	compactViewWidth = 72
+	defaultViewWidth   = 80
+	compactViewWidth   = 72
+	dashboardViewWidth = 100
 )
 
 type palette struct {
-	primary color.Color
-	accent  color.Color
-	text    color.Color
-	muted   color.Color
-	success color.Color
-	warning color.Color
-	danger  color.Color
+	primary            color.Color
+	accent             color.Color
+	text               color.Color
+	muted              color.Color
+	success            color.Color
+	warning            color.Color
+	danger             color.Color
+	selectedBackground color.Color
+	hoveredBackground  color.Color
 }
 
 type themeStyles struct {
-	brand         lipgloss.Style
-	subtitle      lipgloss.Style
-	title         lipgloss.Style
-	label         lipgloss.Style
-	value         lipgloss.Style
-	muted         lipgloss.Style
-	selected      lipgloss.Style
-	hovered       lipgloss.Style
-	button        lipgloss.Style
-	buttonHovered lipgloss.Style
-	panel         lipgloss.Style
-	activePanel   lipgloss.Style
-	key           lipgloss.Style
-	success       lipgloss.Style
-	warning       lipgloss.Style
-	danger        lipgloss.Style
+	brand                lipgloss.Style
+	subtitle             lipgloss.Style
+	title                lipgloss.Style
+	label                lipgloss.Style
+	value                lipgloss.Style
+	muted                lipgloss.Style
+	selected             lipgloss.Style
+	hovered              lipgloss.Style
+	selectedRow          lipgloss.Style
+	hoveredRow           lipgloss.Style
+	button               lipgloss.Style
+	buttonHovered        lipgloss.Style
+	buttonPrimary        lipgloss.Style
+	buttonPrimaryHovered lipgloss.Style
+	panel                lipgloss.Style
+	activePanel          lipgloss.Style
+	key                  lipgloss.Style
+	success              lipgloss.Style
+	warning              lipgloss.Style
+	danger               lipgloss.Style
+	editorCursor         lipgloss.Style
 }
 
 var (
@@ -58,34 +66,41 @@ func colorsForBackground(isDark bool) palette {
 		return lipgloss.Color(light)
 	}
 	return palette{
-		primary: pick("#5B35D5", "#9B87F5"),
-		accent:  pick("#006D77", "#5EEAD4"),
-		text:    pick("#20202A", "#F4F1FF"),
-		muted:   pick("#666273", "#918BA6"),
-		success: pick("#167647", "#52D68A"),
-		warning: pick("#9A6700", "#F5C451"),
-		danger:  pick("#C5283D", "#FF6B7D"),
+		primary:            pick("#5B35D5", "#9B87F5"),
+		accent:             pick("#006D77", "#5EEAD4"),
+		text:               pick("#20202A", "#F4F1FF"),
+		muted:              pick("#666273", "#918BA6"),
+		success:            pick("#167647", "#52D68A"),
+		warning:            pick("#9A6700", "#F5C451"),
+		danger:             pick("#C5283D", "#FF6B7D"),
+		selectedBackground: pick("#EEEAFE", "#251F3D"),
+		hoveredBackground:  pick("#E7F8F6", "#102F2C"),
 	}
 }
 
 func stylesForPalette(colors palette) themeStyles {
 	return themeStyles{
-		brand:         lipgloss.NewStyle().Bold(true).Foreground(colors.primary),
-		subtitle:      lipgloss.NewStyle().Foreground(colors.muted),
-		title:         lipgloss.NewStyle().Bold(true).Foreground(colors.text),
-		label:         lipgloss.NewStyle().Foreground(colors.muted),
-		value:         lipgloss.NewStyle().Foreground(colors.text),
-		muted:         lipgloss.NewStyle().Foreground(colors.muted),
-		selected:      lipgloss.NewStyle().Bold(true).Foreground(colors.primary),
-		hovered:       lipgloss.NewStyle().Underline(true).Foreground(colors.accent),
-		button:        lipgloss.NewStyle().Foreground(colors.accent),
-		buttonHovered: lipgloss.NewStyle().Bold(true).Underline(true).Foreground(colors.accent),
-		panel:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colors.muted).Padding(0, 1),
-		activePanel:   lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colors.primary).Padding(0, 1),
-		key:           lipgloss.NewStyle().Bold(true).Foreground(colors.accent),
-		success:       lipgloss.NewStyle().Foreground(colors.success),
-		warning:       lipgloss.NewStyle().Foreground(colors.warning),
-		danger:        lipgloss.NewStyle().Foreground(colors.danger),
+		brand:                lipgloss.NewStyle().Bold(true).Foreground(colors.primary),
+		subtitle:             lipgloss.NewStyle().Foreground(colors.muted),
+		title:                lipgloss.NewStyle().Bold(true).Foreground(colors.text),
+		label:                lipgloss.NewStyle().Foreground(colors.muted),
+		value:                lipgloss.NewStyle().Foreground(colors.text),
+		muted:                lipgloss.NewStyle().Foreground(colors.muted),
+		selected:             lipgloss.NewStyle().Bold(true).Foreground(colors.primary),
+		hovered:              lipgloss.NewStyle().Underline(true).Foreground(colors.accent),
+		selectedRow:          lipgloss.NewStyle().Background(colors.selectedBackground),
+		hoveredRow:           lipgloss.NewStyle().Background(colors.hoveredBackground),
+		button:               lipgloss.NewStyle().Foreground(colors.accent),
+		buttonHovered:        lipgloss.NewStyle().Bold(true).Underline(true).Foreground(colors.accent),
+		buttonPrimary:        lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(colors.accent),
+		buttonPrimaryHovered: lipgloss.NewStyle().Bold(true).Reverse(true).Underline(true).Foreground(colors.accent),
+		panel:                lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colors.muted).Padding(0, 1),
+		activePanel:          lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colors.primary).Padding(0, 1),
+		key:                  lipgloss.NewStyle().Bold(true).Foreground(colors.accent),
+		success:              lipgloss.NewStyle().Foreground(colors.success),
+		warning:              lipgloss.NewStyle().Foreground(colors.warning),
+		danger:               lipgloss.NewStyle().Foreground(colors.danger),
+		editorCursor:         lipgloss.NewStyle().Bold(true).Reverse(true),
 	}
 }
 

@@ -134,6 +134,24 @@ func TestProjectMouseWheelScrollsAndButtonsAct(t *testing.T) {
 	}
 }
 
+func TestMouseProjectFilterShowsOnlyModifiedRows(t *testing.T) {
+	m := mouseProjectsModel(3)
+	m.projectStates[0].Status = "clean"
+	m.projectStates[1].Status = "modified"
+	m.projectStates[2].Kind = app.ProjectMissing
+	m.projectStates[2].Status = ""
+	m.refreshProjectList()
+	content := m.View().Content
+	modified := regionForTarget(t, m.mouseRegions(content), mouseTarget{kind: mouseTargetButton, action: mouseActionFilterModified})
+	m = clickViewTarget(t, m, modified)
+	if m.projectFilter != projectFilterModified || len(m.projectList.VisibleItems()) != 1 {
+		t.Fatalf("modified filter click failed: filter=%v items=%d", m.projectFilter, len(m.projectList.VisibleItems()))
+	}
+	if selected, _ := m.selectedProjectState(); selected.Name != "project-b" {
+		t.Fatalf("modified filter selected %q", selected.Name)
+	}
+}
+
 func TestMouseChangesButtonOpensDiffViewer(t *testing.T) {
 	m := mouseProjectsModel(2)
 	content := m.View().Content
@@ -170,6 +188,16 @@ func TestProfileMouseHoverSelectAndOptionsButton(t *testing.T) {
 	m = clickViewTarget(t, m, options)
 	if m.screen != screenProjectOptions || m.adoptName != "project-a" {
 		t.Fatalf("profile options button failed: screen=%v project=%q", m.screen, m.adoptName)
+	}
+}
+
+func TestEditorMouseSaveButtonUsesExistingSaveSemantics(t *testing.T) {
+	m, _ := openEditorModel(t, []byte("API_KEY=value\n"))
+	content := m.View().Content
+	save := regionForTarget(t, m.mouseRegions(content), mouseTarget{kind: mouseTargetButton, action: mouseActionSaveEditor})
+	m = clickViewTarget(t, m, save)
+	if m.screen != screenProfiles || m.info != "no changes to save" {
+		t.Fatalf("editor save button changed keyboard semantics: screen=%v info=%q", m.screen, m.info)
 	}
 }
 

@@ -141,6 +141,7 @@ type model struct {
 	adoptCandidates, adoptProfiles                         []string
 	adoptReturn                                            screen
 	projectCursor, profileCursor, menuCursor, fieldCursor  int
+	projectFilter                                          projectFilter
 	selectedProject, pendingProfile, pendingProject        string
 	openProjectAfterReload                                 string
 	pendingSync                                            gitops.SyncState
@@ -174,6 +175,7 @@ type model struct {
 	editorBase                                             []byte
 	editorProject, editorPath, editorBaseProfile           string
 	editorCRLF, editorTrailingNewline, editorBaseAvailable bool
+	editorTopLine, editorHorizontalOffset                  int
 	editorReturn                                           screen
 	version                                                string
 	updateLatest                                           string

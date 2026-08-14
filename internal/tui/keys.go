@@ -335,6 +335,10 @@ func (m model) projectsKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "q":
 		return m, tea.Quit
+	case "tab":
+		m.cycleProjectFilter(1)
+	case "shift+tab":
+		m.cycleProjectFilter(-1)
 	case "up", "k":
 		m.projectCursor = max(0, m.projectCursor-1)
 	case "down", "j":

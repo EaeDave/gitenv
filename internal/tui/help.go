@@ -29,6 +29,7 @@ func keymapFor(s screen) []keyBinding {
 			{"pgup/pgdn", "move one page"},
 			{"home/end", "jump to first / last project"},
 			{"/", "fuzzy-search projects"},
+			{"tab/shift+tab", "cycle all / modified / missing filters"},
 			{"enter", "open, adopt, or add the selected project"},
 			{"a", "add current project"},
 			{"c", "capture .env into a profile"},
