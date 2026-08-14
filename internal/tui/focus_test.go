@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/eaedave/gitenv/internal/app"
 	"github.com/eaedave/gitenv/internal/envdiff"
@@ -39,6 +39,31 @@ func TestReloadLandsOnCurrentProjectWhenLaunchedInsideIt(t *testing.T) {
 	}
 	if len(got.profiles) != 2 {
 		t.Fatalf("focused project profiles = %#v", got.profiles)
+	}
+}
+
+func TestReloadOpensProjectAfterAddingCurrentFolder(t *testing.T) {
+	cfg := vault.LocalConfig{VaultPath: "/vault", Projects: map[string]vault.LocalProject{
+		"api": {Path: "/api", ActiveProfile: "prod"},
+	}}
+	m := model{
+		cfg:                    &cfg,
+		screen:                 screenProjects,
+		landed:                 true,
+		openProjectAfterReload: "api",
+	}
+	msg := reloadMsg{
+		manifest: vault.Manifest{Projects: map[string]vault.Project{
+			"api": {Profiles: map[string]vault.Profile{"prod": {}}},
+		}},
+		statuses: map[string]string{"api": "clean"},
+		current:  app.CurrentProject{LinkedName: "api", Path: "/api"},
+	}
+
+	next, _ := m.Update(msg)
+	got := next.(model)
+	if got.screen != screenProfiles || got.selectedProject != "api" || got.openProjectAfterReload != "" {
+		t.Fatalf("new project did not open after reload: %#v", got)
 	}
 }
 
@@ -88,7 +113,7 @@ func TestProfilesBrowseShortcutUnlocksProjectList(t *testing.T) {
 	if !m.isFocusedProject() {
 		t.Fatal("model launched inside a project should be focused")
 	}
-	next, _ := m.profilesKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	next, _ := m.profilesKey(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	got := next.(model)
 	if !got.browseProjects || got.screen != screenProjects || got.selectedProject != "" {
 		t.Fatalf("p did not unlock project browsing: %#v", got)
@@ -101,7 +126,7 @@ func TestProfilesBrowseShortcutUnlocksProjectList(t *testing.T) {
 func TestProfilesEscQuitsWhenFocusedAndReturnsWhenBrowsing(t *testing.T) {
 	cfg := vault.LocalConfig{Projects: map[string]vault.LocalProject{"api": {Path: "/api", ActiveProfile: "dev"}}}
 	focused := model{cfg: &cfg, screen: screenProfiles, selectedProject: "api", current: app.CurrentProject{LinkedName: "api"}}
-	_, cmd := focused.profilesKey(tea.KeyMsg{Type: tea.KeyEsc})
+	_, cmd := focused.profilesKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if cmd == nil {
 		t.Fatal("esc in a focused project should quit")
 	}
@@ -110,7 +135,7 @@ func TestProfilesEscQuitsWhenFocusedAndReturnsWhenBrowsing(t *testing.T) {
 	}
 
 	browsing := model{cfg: &cfg, screen: screenProfiles, selectedProject: "api", browseProjects: true, current: app.CurrentProject{LinkedName: "api"}}
-	next, cmd := browsing.profilesKey(tea.KeyMsg{Type: tea.KeyEsc})
+	next, cmd := browsing.profilesKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if cmd != nil {
 		t.Fatal("esc while browsing should not quit")
 	}
@@ -150,7 +175,7 @@ func TestProfilesReloadRechecksStatus(t *testing.T) {
 		current:         app.CurrentProject{LinkedName: "api"},
 		syncStatus:      gitops.SyncStatus{State: gitops.SyncSynced},
 	}
-	next, cmd := m.profilesKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	next, cmd := m.profilesKey(tea.KeyPressMsg{Code: 'r', Text: "r"})
 	got := next.(model)
 	if cmd == nil {
 		t.Fatal("reload should dispatch a refresh command")
@@ -190,7 +215,7 @@ func syncViewerModel(focused bool) model {
 }
 
 func TestSyncViewerScopesToCurrentProjectWhenFocused(t *testing.T) {
-	view := syncViewerModel(true).View()
+	view := syncViewerModel(true).View().Content
 	if !strings.Contains(view, "API_KEY") || !strings.Contains(view, "api / dev") {
 		t.Fatalf("focused viewer should show the current project:\n%s", view)
 	}
@@ -200,7 +225,7 @@ func TestSyncViewerScopesToCurrentProjectWhenFocused(t *testing.T) {
 }
 
 func TestSyncViewerShowsEveryProjectWhenBrowsing(t *testing.T) {
-	view := syncViewerModel(false).View()
+	view := syncViewerModel(false).View().Content
 	if !strings.Contains(view, "API_KEY") || !strings.Contains(view, "WORKER_KEY") {
 		t.Fatalf("browsing viewer should show every project:\n%s", view)
 	}
@@ -208,14 +233,14 @@ func TestSyncViewerShowsEveryProjectWhenBrowsing(t *testing.T) {
 
 func TestSyncViewerReturnsToItsOrigin(t *testing.T) {
 	fromProfiles := syncViewerModel(true)
-	next, _ := fromProfiles.syncDiffKey(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ := fromProfiles.syncDiffKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if got := next.(model); got.screen != screenProfiles {
 		t.Fatalf("viewer opened from profiles should return there: %v", got.screen)
 	}
 
 	fromProjects := syncViewerModel(false)
 	fromProjects.syncDiffReturn = screenProjects
-	next, _ = fromProjects.syncDiffKey(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = fromProjects.syncDiffKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if got := next.(model); got.screen != screenProjects {
 		t.Fatalf("viewer opened from the project list should return there: %v", got.screen)
 	}

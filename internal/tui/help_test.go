@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // keymapHasKey reports whether a keymap binds the given key column.
@@ -23,7 +23,7 @@ func keymapHasKey(bindings []keyBinding, keys string) bool {
 func TestHelpReturnsToOriginatingScreen(t *testing.T) {
 	for _, origin := range []screen{screenProjects, screenProfiles} {
 		m := model{screen: origin}
-		opened, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+		opened, cmd := m.handleKey(tea.KeyPressMsg{Code: '?', Text: "?"})
 		got := opened.(model)
 		if cmd != nil {
 			t.Fatalf("opening help must not start a command (origin %v)", origin)
@@ -31,7 +31,7 @@ func TestHelpReturnsToOriginatingScreen(t *testing.T) {
 		if got.screen != screenHelp || got.helpReturn != origin {
 			t.Fatalf("? did not open help remembering origin %v: screen=%v return=%v", origin, got.screen, got.helpReturn)
 		}
-		back, _ := got.helpKey(tea.KeyMsg{Type: tea.KeyEsc})
+		back, _ := got.helpKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 		if back.(model).screen != origin {
 			t.Fatalf("esc did not return to %v: screen=%v", origin, back.(model).screen)
 		}

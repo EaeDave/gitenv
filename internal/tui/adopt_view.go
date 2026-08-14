@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 
 	"github.com/eaedave/gitenv/internal/app"
 )
@@ -14,7 +14,7 @@ import (
 // the user can bring onto this machine with enter. The old name/profile/status
 // row is gone because on a fresh machine most projects have no local link and
 // no status to show — the badge plus a single hint carries the useful signal.
-func (m model) renderProjectList() string {
+func (m model) renderLegacyProjectList() string {
 	if len(m.projectStates) == 0 {
 		return styles.muted.Render("No projects in the vault yet.\nPress a in a directory with .env to add one.")
 	}
@@ -29,7 +29,7 @@ func (m model) renderProjectList() string {
 	// The confusing state this feature fixes: the vault has projects but none is
 	// linked here. Say so and point at the two ways forward.
 	if !anyLinked {
-		rows = append(rows, "", styles.muted.Render("None linked on this computer yet — press enter to adopt, or d to scan for clones."))
+		rows = append(rows, "", styles.muted.Render("None linked on this computer yet — press enter to adopt, or f to scan for clones."))
 	}
 	return strings.Join(rows, "\n")
 }

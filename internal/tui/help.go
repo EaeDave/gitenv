@@ -1,6 +1,6 @@
 package tui
 
-import tea "github.com/charmbracelet/bubbletea"
+import tea "charm.land/bubbletea/v2"
 
 // keyBinding is one row of a screen's authoritative keymap: the literal keys the
 // handler listens for, and what pressing them does.
@@ -25,7 +25,10 @@ func keymapFor(s screen) []keyBinding {
 	case screenProjects:
 		return []keyBinding{
 			{"↑↓/jk", "move between projects"},
-			{"enter", "open project / adopt"},
+			{"pgup/pgdn", "move one page"},
+			{"home/end", "jump to first / last project"},
+			{"/", "fuzzy-search projects"},
+			{"enter", "open, adopt, or add the selected project"},
 			{"a", "add current project"},
 			{"c", "capture .env into a profile"},
 			{"o", "project options (env file, line endings)"},
@@ -135,7 +138,7 @@ func clampHelpOffset(offset, lineCount, pageSize int) int {
 // helpKey drives the help screen: any exit key returns to the originating
 // screen, and the arrow/paging keys scroll when the content is taller than the
 // terminal (a no-op when it already fits).
-func (m model) helpKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) helpKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	lines := m.helpLines(availableWidth(m.width))
 	pageSize := m.helpPageSize()
 	m.helpOffset = clampHelpOffset(m.helpOffset, len(lines), pageSize)
@@ -149,7 +152,7 @@ func (m model) helpKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.helpOffset = min(helpMaxOffset(len(lines), pageSize), m.helpOffset+1)
 	case "pgup", "ctrl+b":
 		m.helpOffset = max(0, m.helpOffset-pageSize)
-	case "pgdown", "ctrl+f", " ":
+	case "pgdown", "ctrl+f", "space":
 		m.helpOffset = min(helpMaxOffset(len(lines), pageSize), m.helpOffset+pageSize)
 	}
 	return m, nil

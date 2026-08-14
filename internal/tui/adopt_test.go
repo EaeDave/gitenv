@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/eaedave/gitenv/internal/app"
 	gitops "github.com/eaedave/gitenv/internal/git"
@@ -57,7 +57,7 @@ func TestFreshMachineAdoptsMissingProject(t *testing.T) {
 		t.Fatalf("fresh machine did not list the vault project as missing: %#v", m.projectStates)
 	}
 
-	next, cmd := m.projectsKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.projectsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got := next.(model)
 	if cmd != nil {
 		t.Fatalf("opening the destination form must not start a command")
@@ -82,7 +82,7 @@ func TestEnterOnFoundProjectRoutesByCandidateCount(t *testing.T) {
 		{Name: "api", Kind: app.ProjectFound, Candidates: []string{"/home/me/dev/api"}},
 	}}
 	single.projects = projectNames(single.projectStates)
-	next, _ := single.projectsKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ := single.projectsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got := next.(model)
 	if got.screen != screenAdoptLink || got.adoptName != "api" {
 		t.Fatalf("single candidate did not open the link form: screen=%v", got.screen)
@@ -95,7 +95,7 @@ func TestEnterOnFoundProjectRoutesByCandidateCount(t *testing.T) {
 		{Name: "api", Kind: app.ProjectFound, Candidates: []string{"/a/api", "/b/api"}},
 	}}
 	multi.projects = projectNames(multi.projectStates)
-	next, _ = multi.projectsKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = multi.projectsKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got = next.(model)
 	if got.screen != screenAdoptCandidates || len(got.adoptCandidates) != 2 {
 		t.Fatalf("multiple candidates did not open the picker: screen=%v candidates=%#v", got.screen, got.adoptCandidates)
@@ -111,7 +111,7 @@ func TestCaptureOnNonLinkedProjectDoesNotStartOperation(t *testing.T) {
 	}}
 	m.projects = projectNames(m.projectStates)
 
-	next, cmd := m.projectsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	next, cmd := m.projectsKey(tea.KeyPressMsg{Code: 'c', Text: "c"})
 	got := next.(model)
 	if cmd != nil || got.busy {
 		t.Fatalf("capture on non-linked project started an operation: cmd=%v busy=%v", cmd, got.busy)
@@ -157,7 +157,7 @@ func TestProjectListDistinguishesEmptyFromUnlinked(t *testing.T) {
 	if strings.Contains(out, "No projects in the vault yet") {
 		t.Fatalf("unlinked case wrongly used the empty-vault message:\n%s", out)
 	}
-	if !strings.Contains(out, "press enter to adopt") || !strings.Contains(out, "d to scan") {
+	if !strings.Contains(out, "press enter to adopt") || !strings.Contains(out, "f to scan") {
 		t.Fatalf("unlinked case did not guide the user to adopt or scan:\n%s", out)
 	}
 }
@@ -177,7 +177,7 @@ func TestAdoptCandidatesPickerOpensProfilePicker(t *testing.T) {
 		adoptCandidates: []string{"/a/api", "/b/api"},
 		menuCursor:      1,
 	}
-	next, cmd := m.adoptCandidatesKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.adoptCandidatesKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got := next.(model)
 	if cmd != nil || got.screen != screenAdoptLink || len(got.fields) != 1 {
 		t.Fatalf("candidate did not open path-only link form: screen=%v fields=%#v cmd=%v", got.screen, got.fields, cmd)
@@ -186,7 +186,7 @@ func TestAdoptCandidatesPickerOpensProfilePicker(t *testing.T) {
 		t.Fatalf("link path default is wrong: %#v", got.fields)
 	}
 
-	next, cmd = got.formKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd = got.formKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got = next.(model)
 	if cmd != nil || got.screen != screenAdoptProfile {
 		t.Fatalf("link form skipped profile picker: screen=%v cmd=%v", got.screen, cmd)
@@ -212,7 +212,7 @@ func TestCloneProfilePickerNavigatesAndReturns(t *testing.T) {
 	}
 	destination := m.fields[0].value
 
-	next, cmd := m.formKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.formKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got := next.(model)
 	if cmd != nil || got.screen != screenAdoptProfile {
 		t.Fatalf("clone form did not open profile picker: screen=%v cmd=%v", got.screen, cmd)
@@ -224,12 +224,12 @@ func TestCloneProfilePickerNavigatesAndReturns(t *testing.T) {
 		}
 	}
 
-	next, _ = got.adoptProfileKey(tea.KeyMsg{Type: tea.KeyDown})
+	next, _ = got.adoptProfileKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	got = next.(model)
 	if got.menuCursor != 1 || got.adoptProfiles[got.menuCursor] != "dev-dry-run" {
 		t.Fatalf("picker did not move to second profile: cursor=%d profiles=%#v", got.menuCursor, got.adoptProfiles)
 	}
-	next, cmd = got.adoptProfileKey(tea.KeyMsg{Type: tea.KeyEsc})
+	next, cmd = got.adoptProfileKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	got = next.(model)
 	if cmd != nil || got.screen != screenAdoptClone || got.fields[0].value != destination {
 		t.Fatalf("escape did not preserve clone form: screen=%v fields=%#v cmd=%v", got.screen, got.fields, cmd)
@@ -242,7 +242,7 @@ func TestProfilePickerEnterStartsRememberedAdoption(t *testing.T) {
 	cfg := vault.LocalConfig{VaultPath: "/vault", Projects: map[string]vault.LocalProject{}}
 	m := model{cfg: &cfg, screen: screenAdoptProfile, adoptReturn: screenAdoptClone, adoptName: "api", adoptPath: "/work/api", adoptProfiles: []string{"dev", "prod"}, menuCursor: 1}
 
-	next, cmd := m.adoptProfileKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.adoptProfileKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got := next.(model)
 	if cmd == nil || !got.busy || got.screen != screenProjects {
 		t.Fatalf("picker Enter did not start clone: screen=%v busy=%v cmd=%v", got.screen, got.busy, cmd)

@@ -93,7 +93,10 @@ terms and status labels — the list below is only the everyday subset.
 Projects screen:
 
 ```text
-enter   open the project, or adopt it onto this computer
+↑↓/jk   move through the scrollable project list
+/       fuzzy-search projects by name, path, or repository
+enter   open the project, adopt it, or add the current folder when prompted
+a       add the current folder as a project
 c       capture the .env into a profile
 s       sync with the remote (contextual)
 v       open the change viewer
@@ -138,6 +141,7 @@ p / d             publish / discard the selected environment
 esc/q             back
 ```
 
+Capture preview: `enter` or `y` confirms; `n` or `esc` cancels.
 Inline editor: `ctrl+s` save, `esc` cancel, `enter` new line.
 Everywhere: `ctrl+c` quits, `U` installs an offered update.
 

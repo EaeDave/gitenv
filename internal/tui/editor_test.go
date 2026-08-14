@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textarea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/eaedave/gitenv/internal/vault"
 )
@@ -127,10 +127,10 @@ func TestEditorRefusesContentItCannotPreserve(t *testing.T) {
 }
 
 func typeIntoEditor(m model, text string) model {
-	m2, _ := m.editorKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m2, _ := m.editorKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = m2.(model)
 	for _, r := range text {
-		next, _ := m.editorKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		next, _ := m.editorKey(tea.KeyPressMsg{Code: r, Text: string(r)})
 		m = next.(model)
 	}
 	return m
@@ -146,7 +146,7 @@ func TestEditorSavesEditsWithFidelity(t *testing.T) {
 		t.Fatalf("editor without a captured baseline should say so:\n%s", view)
 	}
 
-	saved, cmd := m.editorKey(tea.KeyMsg{Type: tea.KeyCtrlS})
+	saved, cmd := m.editorKey(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	m = saved.(model)
 	if cmd == nil || m.screen != screenProfiles || m.info != ".env saved" {
 		t.Fatalf("save did not return to profiles: screen=%v info=%q", m.screen, m.info)
@@ -169,7 +169,7 @@ func TestEditorNoOpSaveWritesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	saved, cmd := m.editorKey(tea.KeyMsg{Type: tea.KeyCtrlS})
+	saved, cmd := m.editorKey(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	m = saved.(model)
 	if cmd != nil || m.screen != screenProfiles || m.info != "no changes to save" {
 		t.Fatalf("no-op save misbehaved: screen=%v info=%q cmd=%v", m.screen, m.info, cmd)
@@ -188,19 +188,19 @@ func TestEditorEscConfirmsBeforeDiscardingChanges(t *testing.T) {
 	m, dir := openEditorModel(t, original)
 	m = typeIntoEditor(m, "NEW=1")
 
-	prompted, _ := m.editorKey(tea.KeyMsg{Type: tea.KeyEsc})
+	prompted, _ := m.editorKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = prompted.(model)
 	if m.screen != screenConfirmEditorDiscard {
 		t.Fatalf("dirty esc did not prompt: screen=%v", m.screen)
 	}
-	kept, _ := m.confirmEditorDiscardKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	kept, _ := m.confirmEditorDiscardKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	m = kept.(model)
 	if m.screen != screenEditor || !m.editorDirty() {
 		t.Fatalf("declining discard lost edits: screen=%v", m.screen)
 	}
-	prompted, _ = m.editorKey(tea.KeyMsg{Type: tea.KeyEsc})
+	prompted, _ = m.editorKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = prompted.(model)
-	discarded, _ := m.confirmEditorDiscardKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	discarded, _ := m.confirmEditorDiscardKey(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	m = discarded.(model)
 	if m.screen != screenProfiles || m.editorProject != "" {
 		t.Fatalf("confirmed discard did not close editor: %#v", m)

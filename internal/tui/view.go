@@ -2,15 +2,25 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/eaedave/gitenv/internal/app"
+	"charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	gitops "github.com/eaedave/gitenv/internal/git"
 )
 
-func (m model) View() string {
+func (m model) View() tea.View {
+	view := tea.NewView(m.renderView())
+	view.AltScreen = true
+	view.WindowTitle = "gitenv"
+	return view
+}
+
+func (m model) renderView() string {
 	width := availableWidth(m.width)
 	body := m.renderScreen(width)
 	sections := []string{m.renderHeader(width), body}
@@ -295,40 +305,124 @@ func (m model) renderUnlockMenu(width int) string {
 }
 
 func (m model) renderProjects(width int) string {
-	workspace := m.renderProjectContext()
-	projectList := m.renderProjectList()
-	syncPanel := renderPanel("Sync", m.renderSyncStatus(), width, false)
+	listWidth := width
 	if width >= compactViewWidth {
-		listWidth := max(28, width/3)
-		list := renderPanel("Projects", projectList, listWidth, true)
-		details := renderPanel("Workspace", workspace, width-listWidth-2, false)
-		workspace = lipgloss.JoinHorizontal(lipgloss.Top, list, "  ", details)
-	} else {
-		workspace = lipgloss.JoinVertical(lipgloss.Left, renderPanel("Workspace", workspace, width, false), "", renderPanel("Projects", projectList, width, true))
+		listWidth = max(32, width*2/5)
 	}
-	// The help line carries the everyday actions only. The full keymap, plus the
-	// glossary the audit found missing, lives behind `?` — cramming fourteen
-	// bindings onto one line made none of them readable.
-	help := renderHelp("enter", "open", "c", "capture", "s", "sync", "v", "changes", "f", "find clones", "o", "options", "?", "help", "q", "quit")
+	projectList := m.projectListView(listWidth-4, m.projectListHeight())
+	count := len(m.projectStates)
+	if m.current.HasEnv && m.current.LinkedName == "" {
+		count++
+	}
+	listTitle := fmt.Sprintf("Projects · %d", count)
+	details := m.renderProjectContext(width - listWidth - 2)
+	var workspace string
+	if width >= compactViewWidth {
+		listPanel := renderPanel(listTitle, projectList, listWidth, true)
+		detailPanel := renderPanel("Details", details, width-listWidth-2, false)
+		workspace = lipgloss.JoinHorizontal(lipgloss.Top, listPanel, "  ", detailPanel)
+	} else {
+		// On narrow terminals the selected row is the overview; Enter opens the
+		// project's profile details. Stacking another panel made the primary list
+		// disappear below the fold.
+		workspace = renderPanel(listTitle, projectList, width, true)
+	}
+	help := m.renderProjectsHelp(width)
+	if m.height > 0 && m.height < 28 {
+		return lipgloss.JoinVertical(lipgloss.Left, workspace, "", m.renderProjectSyncSummary(), "", help)
+	}
+	syncPanel := renderPanel("Sync", m.renderProjectSyncStatus(), width, false)
 	return lipgloss.JoinVertical(lipgloss.Left, workspace, "", syncPanel, "", help)
 }
 
-func (m model) renderProjectContext() string {
-	badges := make([]string, 0, 2)
+func (m model) renderProjectsHelp(width int) string {
+	if width < 100 {
+		return renderHelp("↑↓", "select", "enter", "open", "/", "find", "a", "add current", "s", "sync", "?", "help", "q", "quit")
+	}
+	return renderHelp("↑↓", "select", "enter", "open", "/", "find", "a", "add current", "c", "capture", "s", "sync", "v", "changes", "f", "find clones", "o", "options", "?", "help", "q", "quit")
+}
+
+func (m model) renderProjectContext(width int) string {
+	valueWidth := max(18, width-18)
+	if item, ok := m.selectedProjectListItem(); ok {
+		if item.current {
+			return styles.warning.Render("● Current folder is not in gitenv yet") + "\n\n" +
+				labelValue("Project", item.state.Name) + "\n" +
+				labelValue("Path", compactPath(item.state.Path, valueWidth)) + "\n" +
+				styles.success.Render("● .env found") + "\n\n" +
+				styles.key.Render("enter/a") + styles.muted.Render("  add and capture this project")
+		}
+		state := item.state
+		lines := []string{
+			labelValue("Project", state.Name),
+			styles.label.Render("Status  ") + renderStatus(state.Status),
+			labelValue("Profile", valueOrNone(state.ActiveProfile)),
+		}
+		if state.Path != "" {
+			lines = append(lines, labelValue("Path", compactPath(state.Path, valueWidth)))
+		} else if state.Identity != "" {
+			lines = append(lines, labelValue("Repository", ansi.Truncate(state.Identity, valueWidth, "…")))
+		}
+		if state.Name == m.current.LinkedName {
+			lines = append(lines, "", styles.success.Render("● current folder"))
+		}
+		return strings.Join(lines, "\n")
+	}
+
+	badges := styles.muted.Render("○ no project selected")
 	if m.current.HasEnv {
-		badges = append(badges, styles.success.Render("● .env found"))
+		badges = styles.success.Render("● .env found")
 	}
-	if m.current.LinkedName != "" {
-		badges = append(badges, styles.success.Render("● linked: "+m.current.LinkedName))
+	return labelValue("Current", compactPath(m.current.Path, valueWidth)) + "\n" +
+		labelValue("Vault", compactPath(m.cfg.VaultPath, valueWidth)) + "\n\n" + badges
+}
+
+func compactPath(path string, width int) string {
+	if path == "" {
+		return "(none)"
 	}
-	if len(badges) == 0 {
-		badges = append(badges, styles.muted.Render("○ no local .env link"))
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if path == home {
+			path = "~"
+		} else if strings.HasPrefix(path, home+string(os.PathSeparator)) {
+			path = "~" + strings.TrimPrefix(path, home)
+		}
 	}
-	lines := labelValue("Vault", m.cfg.VaultPath) + "\n" + labelValue("Current", m.current.Path) + "\n" + labelValue("Workspace", app.WorkspaceRoot(*m.cfg))
-	if m.cfg.Discovery != nil && !m.cfg.Discovery.ScannedAt.IsZero() {
-		lines += "\n" + labelValue("Scanned", m.cfg.Discovery.ScannedAt.Local().Format("2006-01-02 15:04"))
+	width = max(12, width)
+	if lipgloss.Width(path) <= width {
+		return path
 	}
-	return lines + "\n\n" + strings.Join(badges, "  ")
+	base := filepath.Base(path)
+	if lipgloss.Width(base)+3 >= width {
+		return "…/" + ansi.Truncate(base, width-2, "…")
+	}
+	parentWidth := width - lipgloss.Width(base) - 2
+	parent := ansi.Truncate(filepath.Dir(path), parentWidth, "")
+	return parent + "…/" + base
+}
+
+func (m model) renderProjectSyncSummary() string {
+	status, _ := syncStatusText(m.syncStatus)
+	return styles.label.Render("Sync  ") + status
+}
+
+func (m model) renderProjectSyncStatus() string {
+	status, recommendation := syncStatusText(m.syncStatus)
+	remote := ansi.Truncate(valueOrNone(m.remoteDisplayURL), max(18, availableWidth(m.width)/2), "…")
+	rows := []string{status + styles.muted.Render("  ·  ") + styles.value.Render(remote)}
+	if !m.syncStatus.CheckedAt.IsZero() {
+		rows[0] += styles.muted.Render("  ·  checked " + m.syncStatus.CheckedAt.Local().Format("15:04"))
+	}
+	if m.syncStatus.Dirty {
+		rows = append(rows, styles.warning.Render("● unpublished vault changes"))
+	}
+	if inventory := m.renderSyncInventory(); inventory != "" {
+		rows = append(rows, "", inventory)
+	}
+	if recommendation != "" {
+		rows = append(rows, "", styles.label.Render("Next  ")+styles.value.Render(recommendation))
+	}
+	return strings.Join(rows, "\n")
 }
 
 func (m model) renderProfiles(width int) string {

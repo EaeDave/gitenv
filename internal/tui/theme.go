@@ -1,41 +1,86 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"image/color"
+
+	"charm.land/lipgloss/v2"
+)
 
 const (
 	defaultViewWidth = 80
 	compactViewWidth = 72
 )
 
-var colors = struct {
-	primary, accent, text, muted, success, warning, danger lipgloss.AdaptiveColor
-}{
-	primary: lipgloss.AdaptiveColor{Light: "#5B35D5", Dark: "#9B87F5"},
-	accent:  lipgloss.AdaptiveColor{Light: "#006D77", Dark: "#5EEAD4"},
-	text:    lipgloss.AdaptiveColor{Light: "#20202A", Dark: "#F4F1FF"},
-	muted:   lipgloss.AdaptiveColor{Light: "#666273", Dark: "#918BA6"},
-	success: lipgloss.AdaptiveColor{Light: "#167647", Dark: "#52D68A"},
-	warning: lipgloss.AdaptiveColor{Light: "#9A6700", Dark: "#F5C451"},
-	danger:  lipgloss.AdaptiveColor{Light: "#C5283D", Dark: "#FF6B7D"},
+type palette struct {
+	primary color.Color
+	accent  color.Color
+	text    color.Color
+	muted   color.Color
+	success color.Color
+	warning color.Color
+	danger  color.Color
 }
 
-var styles = struct {
-	brand, subtitle, title, label, value, muted, selected lipgloss.Style
-	panel, activePanel, key, success, warning, danger     lipgloss.Style
-}{
-	brand:       lipgloss.NewStyle().Bold(true).Foreground(colors.primary),
-	subtitle:    lipgloss.NewStyle().Foreground(colors.muted),
-	title:       lipgloss.NewStyle().Bold(true).Foreground(colors.text),
-	label:       lipgloss.NewStyle().Foreground(colors.muted),
-	value:       lipgloss.NewStyle().Foreground(colors.text),
-	muted:       lipgloss.NewStyle().Foreground(colors.muted),
-	selected:    lipgloss.NewStyle().Bold(true).Foreground(colors.primary),
-	panel:       lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colors.muted).Padding(0, 1),
-	activePanel: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colors.primary).Padding(0, 1),
-	key:         lipgloss.NewStyle().Bold(true).Foreground(colors.accent),
-	success:     lipgloss.NewStyle().Foreground(colors.success),
-	warning:     lipgloss.NewStyle().Foreground(colors.warning),
-	danger:      lipgloss.NewStyle().Foreground(colors.danger),
+type themeStyles struct {
+	brand       lipgloss.Style
+	subtitle    lipgloss.Style
+	title       lipgloss.Style
+	label       lipgloss.Style
+	value       lipgloss.Style
+	muted       lipgloss.Style
+	selected    lipgloss.Style
+	panel       lipgloss.Style
+	activePanel lipgloss.Style
+	key         lipgloss.Style
+	success     lipgloss.Style
+	warning     lipgloss.Style
+	danger      lipgloss.Style
+}
+
+var (
+	colors = colorsForBackground(true)
+	styles = stylesForPalette(colors)
+)
+
+func applyTheme(isDark bool) {
+	colors = colorsForBackground(isDark)
+	styles = stylesForPalette(colors)
+}
+
+func colorsForBackground(isDark bool) palette {
+	pick := func(light, dark string) color.Color {
+		if isDark {
+			return lipgloss.Color(dark)
+		}
+		return lipgloss.Color(light)
+	}
+	return palette{
+		primary: pick("#5B35D5", "#9B87F5"),
+		accent:  pick("#006D77", "#5EEAD4"),
+		text:    pick("#20202A", "#F4F1FF"),
+		muted:   pick("#666273", "#918BA6"),
+		success: pick("#167647", "#52D68A"),
+		warning: pick("#9A6700", "#F5C451"),
+		danger:  pick("#C5283D", "#FF6B7D"),
+	}
+}
+
+func stylesForPalette(colors palette) themeStyles {
+	return themeStyles{
+		brand:       lipgloss.NewStyle().Bold(true).Foreground(colors.primary),
+		subtitle:    lipgloss.NewStyle().Foreground(colors.muted),
+		title:       lipgloss.NewStyle().Bold(true).Foreground(colors.text),
+		label:       lipgloss.NewStyle().Foreground(colors.muted),
+		value:       lipgloss.NewStyle().Foreground(colors.text),
+		muted:       lipgloss.NewStyle().Foreground(colors.muted),
+		selected:    lipgloss.NewStyle().Bold(true).Foreground(colors.primary),
+		panel:       lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colors.muted).Padding(0, 1),
+		activePanel: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colors.primary).Padding(0, 1),
+		key:         lipgloss.NewStyle().Bold(true).Foreground(colors.accent),
+		success:     lipgloss.NewStyle().Foreground(colors.success),
+		warning:     lipgloss.NewStyle().Foreground(colors.warning),
+		danger:      lipgloss.NewStyle().Foreground(colors.danger),
+	}
 }
 
 func availableWidth(width int) int {

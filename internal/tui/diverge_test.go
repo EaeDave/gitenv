@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/eaedave/gitenv/internal/app"
 	"github.com/eaedave/gitenv/internal/vault"
@@ -53,13 +53,13 @@ func TestDivergedProfilesToggleUpdatesChoices(t *testing.T) {
 	m.screen = screenDivergedProfiles
 	m.menuCursor = 0
 
-	next, _ := m.divergedProfilesKey(tea.KeyMsg{Type: tea.KeyLeft})
+	next, _ := m.divergedProfilesKey(tea.KeyPressMsg{Code: tea.KeyLeft})
 	got := next.(model)
 	if got.divergedChoices["api/dev"] != app.DivergenceKeepMine {
 		t.Fatalf("toggle did not switch to keep-mine: %#v", got.divergedChoices)
 	}
 
-	next, _ = got.divergedProfilesKey(tea.KeyMsg{Type: tea.KeyRight})
+	next, _ = got.divergedProfilesKey(tea.KeyPressMsg{Code: tea.KeyRight})
 	got = next.(model)
 	if got.divergedChoices["api/dev"] != app.DivergenceTakeRemote {
 		t.Fatalf("second toggle did not switch back to take-remote: %#v", got.divergedChoices)
@@ -73,7 +73,7 @@ func TestConfirmDivergedYStartsOperation(t *testing.T) {
 	m.screen = screenConfirmDiverged
 	m.divergedCursor = 0 // the resolve row
 
-	next, cmd := m.confirmDivergedKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	next, cmd := m.confirmDivergedKey(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	got := next.(model)
 	if cmd == nil {
 		t.Fatal("y on confirm did not start an operation")
@@ -82,7 +82,7 @@ func TestConfirmDivergedYStartsOperation(t *testing.T) {
 		t.Fatalf("y did not enter the busy projects state: busy=%v screen=%v", got.busy, got.screen)
 	}
 
-	cancel, cmd := m.confirmDivergedKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	cancel, cmd := m.confirmDivergedKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	cancelled := cancel.(model)
 	if cmd != nil || cancelled.screen != screenDiverged {
 		t.Fatalf("non-y did not cancel back to the menu: cmd=%v screen=%v", cmd, cancelled.screen)
@@ -125,7 +125,7 @@ func TestResolveNeverDecidesAnUnseenConflict(t *testing.T) {
 	m := model{cfg: &cfg, screen: screenDiverged, diverged: &report}
 
 	// The resolve row is first; entering it with an undecided conflict reviews.
-	next, cmd := m.divergedKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.divergedKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got := next.(model)
 	if cmd != nil {
 		t.Fatal("resolving an unseen conflict started an operation")
@@ -145,24 +145,24 @@ func TestResolveNeverDecidesAnUnseenConflict(t *testing.T) {
 	}
 
 	// What the review renders must match what will be applied.
-	view := got.View()
+	view := got.View().Content
 	if !strings.Contains(view, "api/dev") && !strings.Contains(view, "dev") {
 		t.Fatalf("review does not name the conflicted environment:\n%s", view)
 	}
 
 	// Toggling to keep-mine then resolving proceeds, carrying that exact choice.
-	toggled, _ := got.divergedProfilesKey(tea.KeyMsg{Type: tea.KeyRight})
+	toggled, _ := got.divergedProfilesKey(tea.KeyPressMsg{Code: tea.KeyRight})
 	got = toggled.(model)
 	if got.divergedChoices["api/dev"] != app.DivergenceKeepMine {
 		t.Fatalf("toggle did not record keep-mine: %#v", got.divergedChoices)
 	}
-	back, _ := got.divergedProfilesKey(tea.KeyMsg{Type: tea.KeyEnter})
+	back, _ := got.divergedProfilesKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got = back.(model)
 	if got.screen != screenDiverged {
 		t.Fatalf("leaving the review did not return to the menu: %v", got.screen)
 	}
 	got.divergedCursor = 0
-	proceed, cmd := got.divergedKey(tea.KeyMsg{Type: tea.KeyEnter})
+	proceed, cmd := got.divergedKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatal("confirmation was skipped")
 	}

@@ -7,8 +7,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textarea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/eaedave/gitenv/internal/app"
 )
@@ -62,6 +62,7 @@ func (m model) openEditor(project string, back screen) (tea.Model, tea.Cmd) {
 	}
 
 	editor := textarea.New()
+	editor.SetStyles(textarea.DefaultStyles(m.isDark))
 	editor.Prompt = "  "
 	editor.ShowLineNumbers = true
 	editor.CharLimit = 0
@@ -115,7 +116,7 @@ func (m model) editorDirty() bool {
 	return !bytes.Equal(m.editorBytes(), m.editorRaw)
 }
 
-func (m model) editorKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) editorKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "ctrl+s":
 		return m.saveEditor()
@@ -148,7 +149,7 @@ func (m model) saveEditor() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(loadCmd(m.cfg, m.cwd), inspectSyncCmd(m.cfg))
 }
 
-func (m model) confirmEditorDiscardKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) confirmEditorDiscardKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if key.String() == "y" || key.String() == "Y" {
 		return m.closeEditor("changes discarded")
 	}

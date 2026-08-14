@@ -3,7 +3,7 @@ package tui
 import (
 	"fmt"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/eaedave/gitenv/internal/app"
 	"github.com/eaedave/gitenv/internal/vault"
@@ -110,7 +110,7 @@ func discardDivergedCmd(cfg *vault.LocalConfig) tea.Cmd {
 	}
 }
 
-func (m model) divergedKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) divergedKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	items := m.divergedMenuItems()
 	switch key.String() {
 	case "esc", "q":
@@ -149,7 +149,7 @@ func (m model) divergedKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) divergedProfilesKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) divergedProfilesKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	conflicts := m.divergedConflicts()
 	switch key.String() {
 	case "esc", "enter":
@@ -158,7 +158,7 @@ func (m model) divergedProfilesKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.menuCursor = max(0, m.menuCursor-1)
 	case "down", "j":
 		m.menuCursor = min(max(0, len(conflicts)-1), m.menuCursor+1)
-	case "left", "right", " ":
+	case "left", "right", "space":
 		if m.menuCursor >= 0 && m.menuCursor < len(conflicts) {
 			m.toggleDivergedChoice(conflicts[m.menuCursor])
 		}
@@ -166,7 +166,7 @@ func (m model) divergedProfilesKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) confirmDivergedKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) confirmDivergedKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if key.String() == "y" || key.String() == "Y" {
 		m.screen, m.busy = screenProjects, true
 		if m.pendingDivergedAction() == divergeDiscard {

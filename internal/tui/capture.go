@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/eaedave/gitenv/internal/app"
 	"github.com/eaedave/gitenv/internal/envdiff"
@@ -81,11 +81,20 @@ func capturePreviewBase(cfg *vault.LocalConfig, project, profile string) ([]byte
 	return vault.ReadProfile(cfg, project, profile)
 }
 
-func (m model) confirmCaptureKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if key.String() != "y" && key.String() != "Y" {
+func (m model) confirmCaptureKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "n", "N", "esc", "q":
 		return m.cancelCapturePreview()
+	case "enter", "y", "Y":
+		// Capture is the primary action on this preview. Enter confirms the
+		// highlighted default just like it does on every menu and form.
+	default:
+		return m, nil
 	}
 	project, profile, intent := m.pendingProject, m.pendingProfile, m.pendingCapture
+	if intent == captureNewProject {
+		m.openProjectAfterReload = project
+	}
 	m.clearCapturePreview()
 	if intent == captureNewProject || m.selectedProject == "" {
 		m.screen = screenProjects

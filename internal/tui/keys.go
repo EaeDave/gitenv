@@ -7,16 +7,19 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/eaedave/gitenv/internal/app"
 	gitops "github.com/eaedave/gitenv/internal/git"
 	"github.com/eaedave/gitenv/internal/vault"
 )
 
-func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if key.String() == "ctrl+c" {
 		return m, tea.Quit
+	}
+	if m.screen == screenProjects && m.projectList != nil && m.projectList.SettingFilter() {
+		return m.projectsKey(key)
 	}
 	// `U` stays the self-update key. It is safe to keep next to nothing now:
 	// the old lowercase `u` (publish vault) has been removed, so a slipped
@@ -101,7 +104,7 @@ func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) onboardingKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) onboardingKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "q", "esc":
 		return m, tea.Quit
@@ -137,7 +140,7 @@ func (m *model) openOnboardingSelection() {
 	}
 }
 
-func (m model) formKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) formKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "esc":
 		return m.cancelForm()
@@ -152,7 +155,7 @@ func (m model) formKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+u":
 		m.fields[m.fieldCursor].value = ""
 	default:
-		if text := sanitizeInput(string(key.Runes)); text != "" {
+		if text := sanitizeInput(key.Text); text != "" {
 			m.fields[m.fieldCursor].value += text
 		}
 	}
@@ -325,7 +328,10 @@ func (m model) submitEnrollment(deviceName string) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m model) projectsKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) projectsKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if updated, cmd, handled := m.updateProjectList(key); handled {
+		return updated, cmd
+	}
 	switch key.String() {
 	case "q":
 		return m, tea.Quit
@@ -369,7 +375,7 @@ func (m model) projectsKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) syncDiffKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) syncDiffKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	pageSize := m.syncDiffPageSize()
 	m.syncDiffOffset = clampSyncDiffOffset(m.syncDiffOffset, len(m.syncDiffLines()), pageSize)
 	switch key.String() {
@@ -409,7 +415,7 @@ func (m model) syncDiffKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.syncDiffOffset = min(m.syncDiffMaxOffset(), m.syncDiffOffset+1)
 	case "pgup", "ctrl+b":
 		m.syncDiffOffset = max(0, m.syncDiffOffset-pageSize)
-	case "pgdown", "ctrl+f", " ":
+	case "pgdown", "ctrl+f", "space":
 		m.syncDiffOffset = min(m.syncDiffMaxOffset(), m.syncDiffOffset+pageSize)
 	case "home", "g":
 		m.syncDiffOffset = 0
@@ -420,6 +426,10 @@ func (m model) syncDiffKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) openSelectedProject() {
+	if item, ok := m.selectedProjectListItem(); ok && item.current {
+		m.openAddProject()
+		return
+	}
 	state, ok := m.selectedProjectState()
 	if !ok {
 		return
@@ -471,6 +481,10 @@ func (m *model) openAddProject() {
 }
 
 func (m model) captureSelectedProject() (tea.Model, tea.Cmd) {
+	if item, ok := m.selectedProjectListItem(); ok && item.current {
+		m.openAddProject()
+		return m, nil
+	}
 	state, ok := m.selectedProjectState()
 	if !ok {
 		return m, nil
@@ -491,6 +505,10 @@ func (m model) captureSelectedProject() (tea.Model, tea.Cmd) {
 // vault project. It works whether or not the project is linked here, because
 // both settings live in the encrypted project metadata, not the local link.
 func (m *model) openProjectOptions() {
+	if item, ok := m.selectedProjectListItem(); ok && item.current {
+		m.errText = "add the current project before changing its options"
+		return
+	}
 	state, ok := m.selectedProjectState()
 	if !ok {
 		return
@@ -588,7 +606,7 @@ func (m model) startAdopt(profile string) (tea.Model, tea.Cmd) {
 
 // adoptProfileKey selects from manifest-backed profile names; free-form input
 // is intentionally impossible because a typo would only fail after clone work.
-func (m model) adoptProfileKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) adoptProfileKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "esc", "q":
 		m.screen = m.adoptReturn
@@ -614,7 +632,7 @@ func (m *model) openAdoptCandidates(state app.ProjectState) {
 }
 
 // adoptCandidatesKey drives the discovered-clone picker: pick one path to link.
-func (m model) adoptCandidatesKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) adoptCandidatesKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "esc", "q":
 		m.screen = screenProjects
@@ -638,7 +656,7 @@ func (m model) adoptCandidatesKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) remoteMenuKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) remoteMenuKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "esc", "q":
 		m.screen = screenProjects
@@ -670,7 +688,7 @@ func (m model) selectRemoteMenuItem() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) unlockMenuKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) unlockMenuKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "esc", "q":
 		// A locked vault has nothing to go back to, so the honest exit is to
@@ -728,7 +746,7 @@ func (m model) isFocusedProject() bool {
 	return m.current.LinkedName != "" && !m.browseProjects
 }
 
-func (m model) profilesKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) profilesKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "q", "esc":
 		if m.isFocusedProject() {
@@ -808,7 +826,7 @@ func (m *model) requestProfileRemoval() {
 	m.pendingProfile, m.screen = profile, screenConfirmDelete
 }
 
-func (m model) confirmKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) confirmKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if key.String() == "y" || key.String() == "Y" {
 		project, profile := m.selectedProject, m.pendingProfile
 		m.screen, m.busy = screenProfiles, true
@@ -818,7 +836,7 @@ func (m model) confirmKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) confirmDeleteKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) confirmDeleteKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if key.String() == "y" || key.String() == "Y" {
 		project, profile := m.selectedProject, m.pendingProfile
 		m.pendingProfile, m.screen, m.busy = "", screenProfiles, true
@@ -828,7 +846,7 @@ func (m model) confirmDeleteKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) confirmRemoveRemoteKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) confirmRemoveRemoteKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if key.String() == "y" || key.String() == "Y" {
 		cfg := *m.cfg
 		m.busy = true
@@ -838,7 +856,7 @@ func (m model) confirmRemoveRemoteKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) confirmDisconnectKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) confirmDisconnectKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if key.String() == "y" || key.String() == "Y" {
 		m.screen, m.busy = screenOnboarding, true
 		return m, opCmd(func() error { return app.DisconnectVault(m.cfg) }, "vault disconnected from this computer")

@@ -3,7 +3,7 @@ package tui
 import (
 	"fmt"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/eaedave/gitenv/internal/app"
 	"github.com/eaedave/gitenv/internal/vault"
@@ -11,7 +11,7 @@ import (
 
 // devicesKey drives the device roster. The cursor lands only on pending
 // requests; enrolled devices are listed for reassurance, not mutation.
-func (m model) devicesKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) devicesKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "esc", "q":
 		m.screen = screenProjects
@@ -50,7 +50,7 @@ func (m model) selectedApproval() (vault.EnrollmentRequest, bool) {
 // and pushes, so it is slow: it runs through opCmd so the spinner shows while
 // it works, and the success line tells the user the other computer can now
 // unlock the vault.
-func (m model) confirmApproveKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) confirmApproveKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if key.String() == "y" || key.String() == "Y" {
 		request, ok := m.selectedApproval()
 		if !ok {
@@ -71,7 +71,7 @@ func (m model) confirmApproveKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // confirmRejectKey removes the request only after an explicit y/Y. Rejection
 // grants no access and does not touch enrolled devices or encrypted profiles.
-func (m model) confirmRejectKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) confirmRejectKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if key.String() == "y" || key.String() == "Y" {
 		request, ok := m.selectedApproval()
 		if !ok {

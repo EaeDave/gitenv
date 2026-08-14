@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/eaedave/gitenv/internal/app"
 	gitops "github.com/eaedave/gitenv/internal/git"
@@ -80,6 +80,12 @@ func projectNames(states []app.ProjectState) []string {
 
 // selectedProjectState returns the state under the projects cursor.
 func (m model) selectedProjectState() (app.ProjectState, bool) {
+	if item, ok := m.selectedProjectListItem(); ok {
+		if item.current {
+			return app.ProjectState{}, false
+		}
+		return item.state, true
+	}
 	if m.projectCursor < 0 || m.projectCursor >= len(m.projectStates) {
 		return app.ProjectState{}, false
 	}
