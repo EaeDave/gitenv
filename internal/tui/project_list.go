@@ -55,32 +55,65 @@ func (delegate projectListDelegate) Render(writer io.Writer, model list.Model, i
 		name = styles.value.Render(name)
 	}
 
-	badge := projectBadge(item.state.Kind)
-	if item.current {
-		badge = styles.warning.Render("+")
-	}
-	summary := projectListSummary(item)
+	badge := projectListBadge(item)
+	summary := renderProjectListSummary(item)
 	prefix := marker + badge + " " + name
 	rowWidth := max(8, model.Width()-6)
 	available := max(0, rowWidth-lipglossWidth(prefix)-2)
 	if summary != "" && available >= 6 {
 		summary = ansi.Truncate(summary, available, "…")
-		prefix += "  " + styles.muted.Render(summary)
+		prefix += "  " + summary
 	}
 	_, _ = io.WriteString(writer, ansi.Truncate(prefix, rowWidth, "…"))
 }
 
-func projectListSummary(item projectListItem) string {
+func renderProjectListSummary(item projectListItem) string {
 	if item.current {
-		return "not added"
+		return styles.warning.Render("not added")
 	}
 	state := item.state
 	parts := make([]string, 0, 2)
 	if state.ActiveProfile != "" {
-		parts = append(parts, state.ActiveProfile)
+		parts = append(parts, styles.muted.Render(state.ActiveProfile))
 	}
-	parts = append(parts, projectStateLabel(state))
-	return strings.Join(parts, " · ")
+	label := projectStateLabel(state)
+	switch {
+	case state.Kind != app.ProjectLinked:
+		label = styles.muted.Render(label)
+	case state.Status == "clean" || state.Status == "synced":
+		label = styles.success.Render(label)
+	case state.Status == "modified" || state.Status == "dirty" || state.Status == "missing" || state.Status == "unmanaged":
+		label = styles.warning.Render(label)
+	case state.Status == "error":
+		label = styles.danger.Render(label)
+	default:
+		label = styles.muted.Render(label)
+	}
+	parts = append(parts, label)
+	return strings.Join(parts, styles.muted.Render(" · "))
+}
+
+func projectListBadge(item projectListItem) string {
+	if item.current {
+		return styles.warning.Render("+")
+	}
+	state := item.state
+	if state.Kind != app.ProjectLinked {
+		if state.Kind == app.ProjectFound {
+			return styles.warning.Render("◍")
+		}
+		return styles.muted.Render("○")
+	}
+	switch state.Status {
+	case "clean", "synced":
+		return styles.success.Render("●")
+	case "modified", "dirty", "missing", "unmanaged":
+		return styles.warning.Render("●")
+	case "error":
+		return styles.danger.Render("●")
+	default:
+		return styles.muted.Render("●")
+	}
 }
 
 func projectStateLabel(state app.ProjectState) string {

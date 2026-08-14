@@ -69,6 +69,31 @@ func TestProjectListScrollsWithinTerminalHeight(t *testing.T) {
 	}
 }
 
+func TestProjectListColorsStatusByMeaning(t *testing.T) {
+	cases := []struct {
+		name   string
+		state  app.ProjectState
+		styled string
+		badge  string
+	}{
+		{"clean", app.ProjectState{Kind: app.ProjectLinked, Status: "clean"}, styles.success.Render("up to date"), styles.success.Render("●")},
+		{"modified", app.ProjectState{Kind: app.ProjectLinked, Status: "modified"}, styles.warning.Render("modified"), styles.warning.Render("●")},
+		{"missing clone", app.ProjectState{Kind: app.ProjectMissing}, styles.muted.Render("no local copy"), styles.muted.Render("○")},
+		{"error", app.ProjectState{Kind: app.ProjectLinked, Status: "error"}, styles.danger.Render("error"), styles.danger.Render("●")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			item := projectListItem{state: tc.state}
+			if summary := renderProjectListSummary(item); !strings.Contains(summary, tc.styled) {
+				t.Fatalf("summary %q does not contain semantic style %q", summary, tc.styled)
+			}
+			if badge := projectListBadge(item); badge != tc.badge {
+				t.Fatalf("badge %q, want %q", badge, tc.badge)
+			}
+		})
+	}
+}
+
 func TestProjectListSupportsFuzzySearchAndHidesLongPaths(t *testing.T) {
 	cfg := vault.LocalConfig{VaultPath: "/vault", Projects: map[string]vault.LocalProject{}}
 	longPath := "/home/example/Projects/company/platform/services/promex-tt-mill"
