@@ -336,6 +336,12 @@ func (m model) renderProjects(width int) string {
 }
 
 func (m model) renderProjectsHelp(width int) string {
+	if width < compactViewWidth {
+		return lipgloss.JoinVertical(lipgloss.Left,
+			renderHelp("↑↓", "move", "enter", "open", "/", "find"),
+			renderHelp("a", "add", "s", "sync", "?", "help", "q", "quit"),
+		)
+	}
 	if width < 100 {
 		return renderHelp("↑↓", "select", "enter", "open", "/", "find", "a", "add current", "s", "sync", "?", "help", "q", "quit")
 	}

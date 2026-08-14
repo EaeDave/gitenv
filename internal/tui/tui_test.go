@@ -475,6 +475,20 @@ func TestPasswordFieldsRenderMasked(t *testing.T) {
 	}
 }
 
+func TestProjectHelpFitsFortyColumnTerminal(t *testing.T) {
+	help := (model{}).renderProjectsHelp(40)
+	lines := strings.Split(help, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("narrow help should use two rows, got %d: %q", len(lines), ansi.Strip(help))
+	}
+	// renderView adds two cells of padding on each side.
+	for _, line := range lines {
+		if width := ansi.StringWidth(line); width > 36 {
+			t.Fatalf("help row is %d cells wide in a 40-column terminal: %q", width, ansi.Strip(line))
+		}
+	}
+}
+
 func TestViewDeclaresBubbleTeaV2TerminalFeatures(t *testing.T) {
 	cfg := vault.LocalConfig{}
 	view := (model{cfg: &cfg}).View()

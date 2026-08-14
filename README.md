@@ -104,7 +104,6 @@ f       find local clones of vault projects
 o       project options (env file, line endings)
 b       save your recovery key
 d       devices and pending approvals
-a       add the current directory as a project
 g       sync repository settings
 ?       full keymap and glossary
 r       reload        q  quit

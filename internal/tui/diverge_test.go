@@ -64,6 +64,12 @@ func TestDivergedProfilesToggleUpdatesChoices(t *testing.T) {
 	if got.divergedChoices["api/dev"] != app.DivergenceTakeRemote {
 		t.Fatalf("second toggle did not switch back to take-remote: %#v", got.divergedChoices)
 	}
+
+	next, _ = got.divergedProfilesKey(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	got = next.(model)
+	if got.divergedChoices["api/dev"] != app.DivergenceKeepMine {
+		t.Fatalf("v2 space key did not toggle the choice: %#v", got.divergedChoices)
+	}
 }
 
 func TestConfirmDivergedYStartsOperation(t *testing.T) {
