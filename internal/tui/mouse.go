@@ -353,14 +353,17 @@ func findMouseButtonRegions(content string, buttons []mouseButton) []mouseRegion
 	regions := make([]mouseRegion, 0, len(buttons))
 	for _, button := range buttons {
 		text := button.text()
-		for y, line := range lines {
-			byteIndex := strings.Index(line, text)
+		// Toolbars are rendered after their associated content. Searching from
+		// the bottom prevents a project/profile/value named "[ Sync ]" from
+		// stealing the real button's hit region.
+		for y := len(lines) - 1; y >= 0; y-- {
+			byteIndex := strings.LastIndex(lines[y], text)
 			if byteIndex < 0 {
 				continue
 			}
 			regions = append(regions, mouseRegion{
 				target: mouseTarget{kind: mouseTargetButton, action: button.action},
-				bounds: mouseBounds{x: ansi.StringWidth(line[:byteIndex]), y: y, width: ansi.StringWidth(text), height: 1},
+				bounds: mouseBounds{x: ansi.StringWidth(lines[y][:byteIndex]), y: y, width: ansi.StringWidth(text), height: 1},
 			})
 			break
 		}

@@ -152,6 +152,30 @@ func TestMouseProjectFilterShowsOnlyModifiedRows(t *testing.T) {
 	}
 }
 
+func TestButtonHitRegionsIgnoreButtonLikeProjectAndProfileNames(t *testing.T) {
+	projects := mouseProjectsModel(1)
+	projects.projectStates[0].Name = "[ Sync ]"
+	projects.refreshProjectList()
+	content := projects.View().Content
+	projectRow := regionForTarget(t, projects.mouseRegions(content), mouseTarget{kind: mouseTargetProjectRow, index: 0})
+	syncButton := regionForTarget(t, projects.mouseRegions(content), mouseTarget{kind: mouseTargetButton, action: mouseActionSync})
+	if syncButton.bounds.y == projectRow.bounds.y {
+		t.Fatalf("project named like a button stole sync hit region: row=%#v button=%#v", projectRow.bounds, syncButton.bounds)
+	}
+
+	profiles := mouseProjectsModel(1)
+	profiles.screen = screenProfiles
+	profiles.selectedProject = "project-a"
+	profiles.profiles = []string{"[ Options ]"}
+	profiles.manifest.Projects["project-a"] = vault.Project{Profiles: map[string]vault.Profile{"[ Options ]": {}}}
+	content = profiles.View().Content
+	profileRow := regionForTarget(t, profiles.mouseRegions(content), mouseTarget{kind: mouseTargetProfileRow, index: 0})
+	optionsButton := regionForTarget(t, profiles.mouseRegions(content), mouseTarget{kind: mouseTargetButton, action: mouseActionProfileOptions})
+	if optionsButton.bounds.y == profileRow.bounds.y {
+		t.Fatalf("profile named like a button stole options hit region: row=%#v button=%#v", profileRow.bounds, optionsButton.bounds)
+	}
+}
+
 func TestMouseChangesButtonOpensDiffViewer(t *testing.T) {
 	m := mouseProjectsModel(2)
 	content := m.View().Content

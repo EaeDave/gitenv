@@ -79,6 +79,7 @@ func TestProjectListColorsStatusByMeaning(t *testing.T) {
 		{"clean", app.ProjectState{Kind: app.ProjectLinked, Status: "clean"}, styles.success.Render("up to date"), styles.success.Render("●")},
 		{"modified", app.ProjectState{Kind: app.ProjectLinked, Status: "modified"}, styles.warning.Render("modified"), styles.warning.Render("●")},
 		{"missing clone", app.ProjectState{Kind: app.ProjectMissing}, styles.muted.Render("no local copy"), styles.muted.Render("○")},
+		{"missing env", app.ProjectState{Kind: app.ProjectLinked, Status: "missing"}, styles.warning.Render("env missing"), styles.warning.Render("●")},
 		{"error", app.ProjectState{Kind: app.ProjectLinked, Status: "error"}, styles.danger.Render("error"), styles.danger.Render("●")},
 	}
 	for _, tc := range cases {
