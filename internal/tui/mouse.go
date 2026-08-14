@@ -159,7 +159,7 @@ func (m model) formMouseButtons() []mouseButton {
 func (m model) mouseRegions(content string) []mouseRegion {
 	regions := make([]mouseRegion, 0, 16)
 	if m.screen == screenProjects {
-		regions = append(regions, m.projectListMouseRegions()...)
+		regions = append(regions, m.projectListMouseRegions(content)...)
 		regions = append(regions, findMouseButtonRegions(content, m.projectMouseButtons())...)
 		regions = append(regions, findMouseButtonRegions(content, syncMouseButtons())...)
 	}
@@ -178,34 +178,51 @@ func (m model) mouseRegions(content string) []mouseRegion {
 	return regions
 }
 
-func (m model) projectListMouseRegions() []mouseRegion {
+func (m model) projectListMouseRegions(content string) []mouseRegion {
 	if m.projectList == nil {
 		return nil
 	}
-	width := availableWidth(m.width)
-	panelWidth := projectListPanelWidth(width)
-	const (
-		outerLeft = 2
-		bodyTop   = 4
-	)
-	listLeft := outerLeft + 2 // panel border + horizontal panel padding
-	listTop := bodyTop + 3    // panel border + title + blank line
+	panelWidth := projectListPanelWidth(availableWidth(m.width))
+	const listLeft = 4 // outer padding + panel border + panel padding
+	lines := strings.Split(ansi.Strip(content), "\n")
+	panelTop := -1
+	for y, line := range lines {
+		if strings.Contains(ansi.Truncate(line, panelWidth, ""), "Projects") {
+			panelTop = y
+			break
+		}
+	}
+	if panelTop < 0 {
+		return nil
+	}
+
 	regions := []mouseRegion{{
 		target: mouseTarget{kind: mouseTargetProjectList},
-		bounds: mouseBounds{x: listLeft, y: listTop, width: panelWidth - 4, height: m.projectListHeight()},
+		bounds: mouseBounds{x: listLeft, y: panelTop + 1, width: panelWidth - 4, height: m.projectListHeight()},
 	}}
-
-	itemTop := listTop + 1 // Bubbles status row
-	if m.projectList.SettingFilter() {
-		itemTop++ // filter input row
-	}
 	items := m.projectList.VisibleItems()
 	start, end := m.projectList.Paginator.GetSliceBounds(len(items))
+	searchFrom := panelTop + 1
 	for index := start; index < end; index++ {
-		regions = append(regions, mouseRegion{
-			target: mouseTarget{kind: mouseTargetProjectRow, index: index},
-			bounds: mouseBounds{x: listLeft, y: itemTop + index - start, width: panelWidth - 4, height: 1},
-		})
+		item, ok := items[index].(projectListItem)
+		if !ok {
+			continue
+		}
+		for y := searchFrom; y < len(lines); y++ {
+			// Restrict matching to the list panel. The selected project name may
+			// also appear in the details panel on the same rendered screen.
+			line := ansi.Truncate(lines[y], panelWidth, "")
+			isProjectRow := strings.Contains(line, "●") || strings.Contains(line, "○")
+			if !isProjectRow || !strings.Contains(line, item.state.Name) {
+				continue
+			}
+			regions = append(regions, mouseRegion{
+				target: mouseTarget{kind: mouseTargetProjectRow, index: index},
+				bounds: mouseBounds{x: listLeft, y: y, width: panelWidth - 4, height: 1},
+			})
+			searchFrom = y + 1
+			break
+		}
 	}
 	return regions
 }

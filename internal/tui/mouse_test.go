@@ -49,6 +49,17 @@ func regionForTarget(t *testing.T, regions []mouseRegion, target mouseTarget) mo
 	return mouseRegion{}
 }
 
+func renderedLineForText(t *testing.T, content, text string) int {
+	t.Helper()
+	for lineIndex, line := range strings.Split(ansi.Strip(content), "\n") {
+		if strings.Contains(line, text) {
+			return lineIndex
+		}
+	}
+	t.Fatalf("rendered text not found: %q", text)
+	return -1
+}
+
 func dispatchViewMouse(t *testing.T, m model, msg tea.MouseMsg) model {
 	t.Helper()
 	cmd := m.View().OnMouse(msg)
@@ -72,6 +83,10 @@ func TestViewEnablesMouseAndProjectHoverFeedback(t *testing.T) {
 		t.Fatalf("mouse support is not declared in the v2 view: mode=%v focus=%v handler=%v", view.MouseMode, view.ReportFocus, view.OnMouse != nil)
 	}
 	region := regionForTarget(t, m.mouseRegions(view.Content), mouseTarget{kind: mouseTargetProjectRow, index: 1})
+	actualRow := renderedLineForText(t, view.Content, "project-b")
+	if region.bounds.y != actualRow {
+		t.Fatalf("project row hit target y=%d, rendered row y=%d", region.bounds.y, actualRow)
+	}
 	motion := tea.MouseMotionMsg{X: region.bounds.x, Y: region.bounds.y}
 	m = dispatchViewMouse(t, m, motion)
 	if m.hoveredMouseTarget != region.target {
@@ -138,6 +153,9 @@ func TestProfileMouseHoverSelectAndOptionsButton(t *testing.T) {
 
 	content := m.View().Content
 	row := regionForTarget(t, m.mouseRegions(content), mouseTarget{kind: mouseTargetProfileRow, index: 1})
+	if actualRow := renderedLineForText(t, content, "staging"); row.bounds.y != actualRow {
+		t.Fatalf("profile row hit target y=%d, rendered row y=%d", row.bounds.y, actualRow)
+	}
 	m = dispatchViewMouse(t, m, tea.MouseMotionMsg{X: row.bounds.x, Y: row.bounds.y})
 	if view := ansi.Strip(m.renderProfileList("dev")); !strings.Contains(view, "• staging") {
 		t.Fatalf("profile hover has no visual feedback:\n%s", view)
